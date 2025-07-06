@@ -6,6 +6,7 @@
         public string CustomerName { get; set; }
         public string Item { get; set; }
         public DateTime CreatedAt { get; set; }
+        public int UserId { get; set; } 
     }
 
 }

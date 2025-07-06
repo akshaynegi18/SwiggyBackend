@@ -32,5 +32,11 @@ services:
     volumes:
       - sqlvolume:/var/opt/mssql
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "15672:15672" # RabbitMQ Management UI
+      - "5672:5672"   # AMQP protocol
+
 volumes:
   sqlvolume:
