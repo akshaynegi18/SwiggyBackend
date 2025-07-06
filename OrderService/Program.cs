@@ -21,12 +21,12 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<OrderService.Data.OrderDbContext>();
     db.Database.Migrate();
 }
-app.MapControllers();  // after app = builder.Build();
 
 // Configure the HTTP request pipeline.
 
     app.UseSwagger();
     app.UseSwaggerUI();
+app.MapControllers();  // after app = builder.Build();
 
 
 //app.UseHttpsRedirection();
