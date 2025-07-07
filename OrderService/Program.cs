@@ -17,12 +17,17 @@ builder.Services.AddDbContext<OrderDbContext>(options =>
 
 builder.Services.AddMassTransit(x =>
 {
+    x.AddConsumer<OrderPlacedEventConsumer>();
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host("rabbitmq", "/", h =>
         {
             h.Username("guest");
             h.Password("guest");
+        });
+        cfg.ReceiveEndpoint("order-placed-queue", e =>
+        {
+            e.ConfigureConsumer<OrderPlacedEventConsumer>(context);
         });
     });
 });
