@@ -22,6 +22,18 @@ services:
       - ASPNETCORE_URLS=http://+:8081
       - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=UserDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True
 
+  notification-api:
+    build:
+      context: ./NotificationService
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    depends_on:
+      - rabbitmq
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8082
+
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
