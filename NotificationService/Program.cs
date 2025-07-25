@@ -1,5 +1,5 @@
 using MassTransit;
-using NotificationService.Consumers;
+
 
 namespace NotificationService
 {

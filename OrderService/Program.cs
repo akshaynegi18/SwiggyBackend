@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderService.Data;
 using MassTransit;
+using OrderService.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,8 +34,9 @@ builder.Services.AddMassTransit(x =>
 });
 
 builder.Services.AddHttpClient();
-
 builder.Services.AddControllers();
+builder.Services.AddSignalR(); // Register SignalR
+
 var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
@@ -44,10 +46,12 @@ using (var scope = app.Services.CreateScope())
 
 // Configure the HTTP request pipeline.
 
-    app.UseSwagger();
-    app.UseSwaggerUI();
+app.UseSwagger();
+app.UseSwaggerUI();
 app.MapControllers();  // after app = builder.Build();
 
+// Map SignalR hub
+app.MapHub<OrderTrackingHub>("/order-tracking-hub");
 
 //app.UseHttpsRedirection();
 
@@ -72,7 +76,6 @@ var summaries = new[]
 //.WithOpenApi();
 
 app.MapGet("/", () => "OrderService is running 🚀");
-
 
 app.Run();
 

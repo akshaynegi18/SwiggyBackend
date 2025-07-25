@@ -2,8 +2,7 @@ using MassTransit;
 using NotificationService.Events;
 using System.Threading.Tasks;
 
-namespace NotificationService.Consumers
-{
+
     public class OrderPlacedEventConsumer : IConsumer<OrderPlacedEvent>
     {
         public Task Consume(ConsumeContext<OrderPlacedEvent> context)
@@ -14,4 +13,3 @@ namespace NotificationService.Consumers
             return Task.CompletedTask;
         }
     }
-}
