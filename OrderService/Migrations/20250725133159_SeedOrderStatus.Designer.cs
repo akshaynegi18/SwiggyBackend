@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OrderService.Data;
 
@@ -11,9 +12,11 @@ using OrderService.Data;
 namespace OrderService.Migrations
 {
     [DbContext(typeof(OrderDbContext))]
-    partial class OrderDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250725133159_SeedOrderStatus")]
+    partial class SeedOrderStatus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -56,7 +59,7 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 1,
-                            CreatedAt = new DateTime(2024, 1, 1, 12, 0, 0, 0, DateTimeKind.Unspecified),
+                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6300),
                             CustomerName = "Akshay",
                             Item = "Paneer Tikka",
                             Status = "Placed",
@@ -65,7 +68,7 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 2,
-                            CreatedAt = new DateTime(2024, 1, 1, 12, 5, 0, 0, DateTimeKind.Unspecified),
+                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6768),
                             CustomerName = "Ravi",
                             Item = "Egg Roll",
                             Status = "Placed",
@@ -74,7 +77,7 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 3,
-                            CreatedAt = new DateTime(2024, 1, 1, 12, 10, 0, 0, DateTimeKind.Unspecified),
+                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6770),
                             CustomerName = "Neha",
                             Item = "Veg Biryani",
                             Status = "Placed",

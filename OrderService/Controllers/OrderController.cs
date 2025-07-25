@@ -5,6 +5,8 @@ using OrderService.Data;
 using OrderService.Model;
 using MassTransit;
 using OrderService.Events;
+using Microsoft.AspNetCore.SignalR;
+using OrderService.Hubs;
 
 namespace OrderService.Controllers;
 
@@ -58,4 +60,25 @@ public class OrderController : ControllerBase
 		var order = await _context.Orders.FindAsync(id);
 		return order == null ? NotFound() : Ok(order);
 	}
+
+    [HttpPost("update-status")]
+    public async Task<IActionResult> UpdateOrderStatus([FromBody] OrderStatusUpdateDto update, [FromServices] IHubContext<OrderTrackingHub> hubContext)
+    {
+        var order = await _context.Orders.FindAsync(update.OrderId);
+        if (order == null) return NotFound();
+
+        order.Status = update.Status;
+        await _context.SaveChangesAsync();
+
+        // Broadcast status update via SignalR
+        await hubContext.Clients.Group($"order-{order.Id}")
+            .SendAsync("OrderStatusUpdated", new
+            {
+                OrderId = order.Id,
+                Status = order.Status,
+                // ETA = CalculateEta(order) // You can implement this method if you want
+            });
+
+        return Ok(order);
+    }
 }
