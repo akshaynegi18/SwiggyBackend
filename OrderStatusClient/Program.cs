@@ -16,6 +16,11 @@ class Program
         {
             Console.WriteLine($"Order status update: {update}");
         });
+        
+        connection.On<DeliveryLocationUpdate>("DeliveryLocationUpdated", update =>
+        {
+            Console.WriteLine($"Order {update.OrderId} location: {update.Latitude}, {update.Longitude}");
+        });
 
         // Retry logic for connecting to SignalR hub
         var maxAttempts = 10;
@@ -51,4 +56,11 @@ class Program
 
         await connection.StopAsync();
     }
+}
+
+public class DeliveryLocationUpdate
+{
+    public int OrderId { get; set; }
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
 }

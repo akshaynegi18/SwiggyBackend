@@ -81,4 +81,28 @@ public class OrderController : ControllerBase
 
         return Ok(order);
     }
+
+    [HttpPost("update-location")]
+    public async Task<IActionResult> UpdateDeliveryLocation(
+        [FromBody] DeliveryLocationUpdateDto update,
+        [FromServices] IHubContext<OrderTrackingHub> hubContext)
+    {
+        var order = await _context.Orders.FindAsync(update.OrderId);
+        if (order == null) return NotFound();
+
+        order.DeliveryLatitude = update.Latitude;
+        order.DeliveryLongitude = update.Longitude;
+        await _context.SaveChangesAsync();
+
+        // Broadcast location update via SignalR
+        await hubContext.Clients.Group($"order-{order.Id}")
+            .SendAsync("DeliveryLocationUpdated", new
+            {
+                OrderId = order.Id,
+                Latitude = order.DeliveryLatitude,
+                Longitude = order.DeliveryLongitude
+            });
+
+        return Ok(order);
+    }
 }

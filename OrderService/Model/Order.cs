@@ -8,6 +8,8 @@
         public DateTime CreatedAt { get; set; }
         public int UserId { get; set; }
         public string Status { get; set; }
+        public double? DeliveryLatitude { get; set; }   
+        public double? DeliveryLongitude { get; set; }  
     }
 
 }
