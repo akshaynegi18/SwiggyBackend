@@ -2,8 +2,22 @@
 using OrderService.Data;
 using MassTransit;
 using OrderService.Hubs;
+using Serilog;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog
+builder.Host.UseSerilog((context, config) =>
+{
+    config
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .WriteTo.Console()
+        .WriteTo.File("logs/orderservice-.log", rollingInterval: RollingInterval.Day);
+});
 
 // Add services to the container.
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -37,45 +51,43 @@ builder.Services.AddHttpClient();
 builder.Services.AddControllers();
 builder.Services.AddSignalR(); // Register SignalR
 
+// Configure OpenTelemetry (moved outside of Serilog configuration)
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("OrderService"))
+            .AddAspNetCoreInstrumentation()
+            .AddEntityFrameworkCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddConsoleExporter();
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("OrderService"))
+            .AddAspNetCoreInstrumentation()
+            .AddPrometheusExporter();
+    });
+
 var app = builder.Build();
+
+// Database migration
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<OrderService.Data.OrderDbContext>();
+    var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
     db.Database.Migrate();
 }
 
 // Configure the HTTP request pipeline.
-
 app.UseSwagger();
 app.UseSwaggerUI();
-app.MapControllers();  // after app = builder.Build();
-
-// Map SignalR hub
+app.MapControllers();
 app.MapHub<OrderTrackingHub>("/order-tracking-hub");
-
-//app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-//app.MapGet("/weatherforecast", () =>
-//{
-//    var forecast =  Enumerable.Range(1, 5).Select(index =>
-//        new WeatherForecast
-//        (
-//            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-//            Random.Shared.Next(-20, 55),
-//            summaries[Random.Shared.Next(summaries.Length)]
-//        ))
-//        .ToArray();
-//    return forecast;
-//})
-//.WithName("GetWeatherForecast")
-//.WithOpenApi();
-
 app.MapGet("/", () => "OrderService is running 🚀");
+
+// Expose Prometheus metrics endpoint
+app.UseOpenTelemetryPrometheusScrapingEndpoint();
 
 app.Run();
 

@@ -8,6 +8,7 @@ using OrderService.Events;
 using Microsoft.AspNetCore.SignalR;
 using OrderService.Hubs;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace OrderService.Controllers;
 
@@ -18,80 +19,127 @@ public class OrderController : ControllerBase
     private readonly OrderDbContext _context;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPublishEndpoint _publishEndpoint;
+    private readonly ILogger<OrderController> _logger;
 
-    public OrderController(OrderDbContext context, IHttpClientFactory httpClientFactory, IPublishEndpoint publishEndpoint)
+    public OrderController(
+        OrderDbContext context, 
+        IHttpClientFactory httpClientFactory, 
+        IPublishEndpoint publishEndpoint,
+        ILogger<OrderController> logger)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _publishEndpoint = publishEndpoint;
+        _logger = logger;
     }
 	
     [HttpPost("place")]
     public async Task<IActionResult> PlaceOrder([FromBody] Order order)
     {
-        // Validate user by calling User Service
-        var client = _httpClientFactory.CreateClient();
-        var userServiceUrl = $"http://user-api:8081/user/{order.UserId}";
-        var response = await client.GetAsync(userServiceUrl);
+        _logger.LogInformation("Placing order for UserId: {UserId}, Item: {Item}", order.UserId, order.Item);
 
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            return BadRequest("Invalid user.");
+            // Validate user by calling User Service
+            var client = _httpClientFactory.CreateClient();
+            var userServiceUrl = $"http://user-api:8081/user/{order.UserId}";
+            var response = await client.GetAsync(userServiceUrl);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("User validation failed for UserId: {UserId}, StatusCode: {StatusCode}", 
+                    order.UserId, response.StatusCode);
+                return BadRequest("Invalid user.");
+            }
+
+            _context.Orders.Add(order);
+            await _context.SaveChangesAsync();
+
+            // Publish event
+            var orderPlacedEvent = new OrderPlacedEvent
+            {
+                OrderId = order.Id,
+                UserId = order.UserId,
+                Item = order.Item,
+                CreatedAt = order.CreatedAt
+            };
+            await _publishEndpoint.Publish(orderPlacedEvent);
+
+            _logger.LogInformation("Order placed successfully. OrderId: {OrderId}, UserId: {UserId}", 
+                order.Id, order.UserId);
+
+            return Ok(order);
         }
-
-        _context.Orders.Add(order);
-        await _context.SaveChangesAsync();
-
-        // Publish event
-        var orderPlacedEvent = new OrderPlacedEvent
+        catch (Exception ex)
         {
-            OrderId = order.Id,
-            UserId = order.UserId,
-            Item = order.Item,
-            CreatedAt = order.CreatedAt
-        };
-        await _publishEndpoint.Publish(orderPlacedEvent);
-
-        return Ok(order);
+            _logger.LogError(ex, "Error placing order for UserId: {UserId}", order.UserId);
+            return StatusCode(500, "An error occurred while placing the order.");
+        }
     }
 
 	[HttpGet("track/{id}")]
 	public async Task<IActionResult> TrackOrder(int id)
 	{
+        _logger.LogInformation("Tracking order with OrderId: {OrderId}", id);
 		var order = await _context.Orders.FindAsync(id);
-		return order == null ? NotFound() : Ok(order);
+        
+        if (order == null)
+        {
+            _logger.LogWarning("Order not found. OrderId: {OrderId}", id);
+            return NotFound();
+        }
+
+        return Ok(order);
 	}
 
     [HttpPost("update-status")]
     public async Task<IActionResult> UpdateOrderStatus([FromBody] OrderStatusUpdateDto update, [FromServices] IHubContext<OrderTrackingHub> hubContext)
     {
-        var order = await _context.Orders.FindAsync(update.OrderId);
-        if (order == null) return NotFound();
+        _logger.LogInformation("Updating order status. OrderId: {OrderId}, NewStatus: {Status}", 
+            update.OrderId, update.Status);
 
-        order.Status = update.Status;
-
-        // Log status update to OrderHistory
-        _context.OrderHistories.Add(new OrderHistory
+        try
         {
-            OrderId = order.Id,
-            Status = order.Status,
-            DeliveryLatitude = order.DeliveryLatitude,
-            DeliveryLongitude = order.DeliveryLongitude,
-            Timestamp = DateTime.UtcNow
-        });
+            var order = await _context.Orders.FindAsync(update.OrderId);
+            if (order == null) 
+            {
+                _logger.LogWarning("Order not found for status update. OrderId: {OrderId}", update.OrderId);
+                return NotFound();
+            }
 
-        await _context.SaveChangesAsync();
+            var oldStatus = order.Status;
+            order.Status = update.Status;
 
-        // Broadcast status update via SignalR
-        await hubContext.Clients.Group($"order-{order.Id}")
-            .SendAsync("OrderStatusUpdated", new
+            // Log status update to OrderHistory
+            _context.OrderHistories.Add(new OrderHistory
             {
                 OrderId = order.Id,
                 Status = order.Status,
-                // ETA = CalculateEta(order) // You can implement this method if you want
+                DeliveryLatitude = order.DeliveryLatitude,
+                DeliveryLongitude = order.DeliveryLongitude,
+                Timestamp = DateTime.UtcNow
             });
 
-        return Ok(order);
+            await _context.SaveChangesAsync();
+
+            // Broadcast status update via SignalR
+            await hubContext.Clients.Group($"order-{order.Id}")
+                .SendAsync("OrderStatusUpdated", new
+                {
+                    OrderId = order.Id,
+                    Status = order.Status,
+                });
+
+            _logger.LogInformation("Order status updated successfully. OrderId: {OrderId}, OldStatus: {OldStatus}, NewStatus: {NewStatus}", 
+                order.Id, oldStatus, order.Status);
+
+            return Ok(order);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating order status. OrderId: {OrderId}", update.OrderId);
+            return StatusCode(500, "An error occurred while updating order status.");
+        }
     }
 
     [HttpPost("update-location")]
@@ -99,55 +147,113 @@ public class OrderController : ControllerBase
         [FromBody] DeliveryLocationUpdateDto update,
         [FromServices] IHubContext<OrderTrackingHub> hubContext)
     {
-        var order = await _context.Orders.FindAsync(update.OrderId);
-        if (order == null) return NotFound();
+        _logger.LogInformation("Updating delivery location. OrderId: {OrderId}, Latitude: {Latitude}, Longitude: {Longitude}", 
+            update.OrderId, update.Latitude, update.Longitude);
 
-        order.DeliveryLatitude = update.Latitude;
-        order.DeliveryLongitude = update.Longitude;
-		
-		
-
-
-		order.ETA = CalculateEta(
-			update.Latitude,
-			update.Longitude,
-			Convert.ToDouble(order.DestinationLatitude),
-			Convert.ToDouble(order.DestinationLongitude)
-		);
-        _context.OrderHistories.Add(new OrderHistory
+        try
         {
-            OrderId = order.Id,
-            Status = order.Status,
-            DeliveryLatitude = order.DeliveryLatitude,
-            DeliveryLongitude = order.DeliveryLongitude,
-            Timestamp = DateTime.UtcNow
-        });
-        await _context.SaveChangesAsync();
+            var order = await _context.Orders.FindAsync(update.OrderId);
+            if (order == null) 
+            {
+                _logger.LogWarning("Order not found for location update. OrderId: {OrderId}", update.OrderId);
+                return NotFound();
+            }
 
-        // Broadcast location and ETA update via SignalR
-        await hubContext.Clients.Group($"order-{order.Id}")
-            .SendAsync("DeliveryLocationUpdated", new
+            order.DeliveryLatitude = update.Latitude;
+            order.DeliveryLongitude = update.Longitude;
+
+            order.ETA = CalculateEta(
+                update.Latitude,
+                update.Longitude,
+                Convert.ToDouble(order.DestinationLatitude),
+                Convert.ToDouble(order.DestinationLongitude)
+            );
+
+            _context.OrderHistories.Add(new OrderHistory
             {
                 OrderId = order.Id,
-                Latitude = order.DeliveryLatitude,
-                Longitude = order.DeliveryLongitude,
-                ETA = order.ETA
+                Status = order.Status,
+                DeliveryLatitude = order.DeliveryLatitude,
+                DeliveryLongitude = order.DeliveryLongitude,
+                Timestamp = DateTime.UtcNow
             });
+            await _context.SaveChangesAsync();
 
-       
+            // Broadcast location and ETA update via SignalR
+            await hubContext.Clients.Group($"order-{order.Id}")
+                .SendAsync("DeliveryLocationUpdated", new
+                {
+                    OrderId = order.Id,
+                    Latitude = order.DeliveryLatitude,
+                    Longitude = order.DeliveryLongitude,
+                    ETA = order.ETA
+                });
 
-        return Ok(order);
+            _logger.LogInformation("Delivery location updated successfully. OrderId: {OrderId}, ETA: {ETA} minutes", 
+                order.Id, order.ETA);
+
+            return Ok(order);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating delivery location. OrderId: {OrderId}", update.OrderId);
+            return StatusCode(500, "An error occurred while updating delivery location.");
+        }
     }
 
     [HttpGet("timeline/{orderId}")]
     public async Task<IActionResult> GetOrderTimeline(int orderId)
     {
-        var history = await _context.OrderHistories
-            .Where(h => h.OrderId == orderId)
-            .OrderBy(h => h.Timestamp)
-            .ToListAsync();
+        _logger.LogInformation("Fetching order timeline. OrderId: {OrderId}", orderId);
 
-        return Ok(history);
+        try
+        {
+            var history = await _context.OrderHistories
+                .Where(h => h.OrderId == orderId)
+                .OrderBy(h => h.Timestamp)
+                .ToListAsync();
+
+            _logger.LogInformation("Order timeline fetched successfully. OrderId: {OrderId}, HistoryCount: {Count}", 
+                orderId, history.Count);
+
+            return Ok(history);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching order timeline. OrderId: {OrderId}", orderId);
+            return StatusCode(500, "An error occurred while fetching order timeline.");
+        }
+    }
+
+    [HttpGet("recommendations/{userId}")]
+    public async Task<IActionResult> GetRecommendations(int userId)
+    {
+        _logger.LogInformation("Fetching recommendations for UserId: {UserId}", userId);
+
+        try
+        {
+            var recommendations = await _context.Orders
+                .Where(o => o.UserId == userId)
+                .GroupBy(o => o.Item)
+                .Select(g => new
+                {
+                    Item = g.Key,
+                    Count = g.Count()
+                })
+                .OrderByDescending(x => x.Count)
+                .Take(5)
+                .ToListAsync();
+
+            _logger.LogInformation("Recommendations fetched successfully. UserId: {UserId}, RecommendationCount: {Count}", 
+                userId, recommendations.Count);
+
+            return Ok(recommendations);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching recommendations. UserId: {UserId}", userId);
+            return StatusCode(500, "An error occurred while fetching recommendations.");
+        }
     }
 
     private int CalculateEta(double fromLat, double fromLng, double toLat, double toLng, double avgSpeedKmh = 30)
@@ -165,24 +271,5 @@ public class OrderController : ControllerBase
         double etaHours = distance / avgSpeedKmh;
         int etaMinutes = (int)Math.Ceiling(etaHours * 60);
         return etaMinutes;
-    }
-
-    [HttpGet("recommendations/{userId}")]
-    public async Task<IActionResult> GetRecommendations(int userId)
-    {
-        // Analyze past orders for the user
-        var recommendations = await _context.Orders
-            .Where(o => o.UserId == userId)
-            .GroupBy(o => o.Item)
-            .Select(g => new
-            {
-                Item = g.Key,
-                Count = g.Count()
-            })
-            .OrderByDescending(x => x.Count)
-            .Take(5) // Top 5 recommendations
-            .ToListAsync();
-
-        return Ok(recommendations);
     }
 }
