@@ -7,6 +7,7 @@ using MassTransit;
 using OrderService.Events;
 using Microsoft.AspNetCore.SignalR;
 using OrderService.Hubs;
+using Microsoft.EntityFrameworkCore;
 
 namespace OrderService.Controllers;
 
@@ -138,6 +139,17 @@ public class OrderController : ControllerBase
         return Ok(order);
     }
 
+    [HttpGet("timeline/{orderId}")]
+    public async Task<IActionResult> GetOrderTimeline(int orderId)
+    {
+        var history = await _context.OrderHistories
+            .Where(h => h.OrderId == orderId)
+            .OrderBy(h => h.Timestamp)
+            .ToListAsync();
+
+        return Ok(history);
+    }
+
     private int CalculateEta(double fromLat, double fromLng, double toLat, double toLng, double avgSpeedKmh = 30)
     {
         double R = 6371; // Radius of the earth in km
@@ -153,5 +165,24 @@ public class OrderController : ControllerBase
         double etaHours = distance / avgSpeedKmh;
         int etaMinutes = (int)Math.Ceiling(etaHours * 60);
         return etaMinutes;
+    }
+
+    [HttpGet("recommendations/{userId}")]
+    public async Task<IActionResult> GetRecommendations(int userId)
+    {
+        // Analyze past orders for the user
+        var recommendations = await _context.Orders
+            .Where(o => o.UserId == userId)
+            .GroupBy(o => o.Item)
+            .Select(g => new
+            {
+                Item = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Count)
+            .Take(5) // Top 5 recommendations
+            .ToListAsync();
+
+        return Ok(recommendations);
     }
 }
