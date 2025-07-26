@@ -6,6 +6,7 @@ using Serilog;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,8 +26,34 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 {
     serverOptions.ListenAnyIP(8080);
 });
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+
+
+// Add the EnableAnnotations call after adding the using directive
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "Order Service API",
+        Version = "v1",
+        Description = "A comprehensive API for managing food delivery orders",
+        Contact = new Microsoft.OpenApi.Models.OpenApiContact
+        {
+            Name = "Development Team",
+            Email = "dev@fooddelivery.com"
+        }
+    });
+
+    // Include XML comments
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    c.IncludeXmlComments(xmlPath);
+
+   
+});
+
 builder.Services.AddDbContext<OrderDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -49,9 +76,9 @@ builder.Services.AddMassTransit(x =>
 
 builder.Services.AddHttpClient();
 builder.Services.AddControllers();
-builder.Services.AddSignalR(); // Register SignalR
+builder.Services.AddSignalR();
 
-// Configure OpenTelemetry (moved outside of Serilog configuration)
+// Configure OpenTelemetry
 builder.Services.AddOpenTelemetry()
     .WithTracing(tracing =>
     {
@@ -81,7 +108,14 @@ using (var scope = app.Services.CreateScope())
 
 // Configure the HTTP request pipeline.
 app.UseSwagger();
-app.UseSwaggerUI();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Order Service API v1");
+    c.DocumentTitle = "Order Service API Documentation";
+    c.DefaultModelsExpandDepth(-1); // Hide schemas section
+    c.DisplayRequestDuration();
+});
+
 app.MapControllers();
 app.MapHub<OrderTrackingHub>("/order-tracking-hub");
 app.MapGet("/", () => "OrderService is running 🚀");
