@@ -12,8 +12,8 @@ using OrderService.Data;
 namespace OrderService.Migrations
 {
     [DbContext(typeof(OrderDbContext))]
-    [Migration("20250725151652_AddDeliveryLocationToOrder")]
-    partial class AddDeliveryLocationToOrder
+    [Migration("20250726091134_AddOrderHistoryTracking")]
+    partial class AddOrderHistoryTracking
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -45,6 +45,15 @@ namespace OrderService.Migrations
 
                     b.Property<double?>("DeliveryLongitude")
                         .HasColumnType("float");
+
+                    b.Property<double?>("DestinationLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DestinationLongitude")
+                        .HasColumnType("float");
+
+                    b.Property<int?>("ETA")
+                        .HasColumnType("int");
 
                     b.Property<string>("Item")
                         .IsRequired()
@@ -89,6 +98,48 @@ namespace OrderService.Migrations
                             Status = "Placed",
                             UserId = 1
                         });
+                });
+
+            modelBuilder.Entity("OrderService.Model.OrderHistory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<double?>("DeliveryLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DeliveryLongitude")
+                        .HasColumnType("float");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderHistories");
+                });
+
+            modelBuilder.Entity("OrderService.Model.OrderHistory", b =>
+                {
+                    b.HasOne("OrderService.Model.Order", "Order")
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Order");
                 });
 #pragma warning restore 612, 618
         }

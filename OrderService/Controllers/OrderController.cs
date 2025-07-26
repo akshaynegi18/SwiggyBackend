@@ -68,6 +68,17 @@ public class OrderController : ControllerBase
         if (order == null) return NotFound();
 
         order.Status = update.Status;
+
+        // Log status update to OrderHistory
+        _context.OrderHistories.Add(new OrderHistory
+        {
+            OrderId = order.Id,
+            Status = order.Status,
+            DeliveryLatitude = order.DeliveryLatitude,
+            DeliveryLongitude = order.DeliveryLongitude,
+            Timestamp = DateTime.UtcNow
+        });
+
         await _context.SaveChangesAsync();
 
         // Broadcast status update via SignalR
@@ -92,17 +103,55 @@ public class OrderController : ControllerBase
 
         order.DeliveryLatitude = update.Latitude;
         order.DeliveryLongitude = update.Longitude;
+		
+		
+
+
+		order.ETA = CalculateEta(
+			update.Latitude,
+			update.Longitude,
+			Convert.ToDouble(order.DestinationLatitude),
+			Convert.ToDouble(order.DestinationLongitude)
+		);
+        _context.OrderHistories.Add(new OrderHistory
+        {
+            OrderId = order.Id,
+            Status = order.Status,
+            DeliveryLatitude = order.DeliveryLatitude,
+            DeliveryLongitude = order.DeliveryLongitude,
+            Timestamp = DateTime.UtcNow
+        });
         await _context.SaveChangesAsync();
 
-        // Broadcast location update via SignalR
+        // Broadcast location and ETA update via SignalR
         await hubContext.Clients.Group($"order-{order.Id}")
             .SendAsync("DeliveryLocationUpdated", new
             {
                 OrderId = order.Id,
                 Latitude = order.DeliveryLatitude,
-                Longitude = order.DeliveryLongitude
+                Longitude = order.DeliveryLongitude,
+                ETA = order.ETA
             });
 
+       
+
         return Ok(order);
+    }
+
+    private int CalculateEta(double fromLat, double fromLng, double toLat, double toLng, double avgSpeedKmh = 30)
+    {
+        double R = 6371; // Radius of the earth in km
+        double dLat = (toLat - fromLat) * Math.PI / 180;
+        double dLon = (toLng - fromLng) * Math.PI / 180;
+        double a =
+            Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+            Math.Cos(fromLat * Math.PI / 180) * Math.Cos(toLat * Math.PI / 180) *
+            Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        double distance = R * c; // Distance in km
+
+        double etaHours = distance / avgSpeedKmh;
+        int etaMinutes = (int)Math.Ceiling(etaHours * 60);
+        return etaMinutes;
     }
 }
