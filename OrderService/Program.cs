@@ -95,6 +95,9 @@ builder.Services.AddAuthorization(options =>
 // Register services
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
+
+//builder.Services.AddHostedService<DeliveryPartnerSimulator>();
+
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
