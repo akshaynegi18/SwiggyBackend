@@ -10,12 +10,15 @@ using OrderService.Hubs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 
 namespace OrderService.Controllers;
 
 [ApiController]
 [Route("[controller]")]
 [Produces("application/json")]
+[Authorize] // Require authentication for all endpoints
 public class OrderController : ControllerBase
 {
     private readonly OrderDbContext _context;
@@ -34,18 +37,23 @@ public class OrderController : ControllerBase
         _publishEndpoint = publishEndpoint;
         _logger = logger;
     }
-	
+
     /// <summary>
     /// Places a new order for a customer
     /// </summary>
-    /// <param name="order">Order details including customer information and items</param>
+    /// <param name="orderDto">Order details including customer information and items</param>
     /// <returns>The created order with assigned ID</returns>
     /// <response code="200">Order placed successfully</response>
     /// <response code="400">Invalid order data or user validation failed</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - Customer role required</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpPost("place")]
+    [Authorize(Policy = "CustomerOnly")]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(typeof(string), 400)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> PlaceOrder([FromBody] PlaceOrderDto orderDto)
     {
@@ -54,11 +62,24 @@ public class OrderController : ControllerBase
             return BadRequest(ModelState);
         }
 
-        _logger.LogInformation("Placing order for UserId: {UserId}, Item: {Item}", orderDto.UserId, orderDto.Item);
+        // Get authenticated user information
+        var authenticatedUserId = GetAuthenticatedUserId();
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+
+        // Security check: Users can only place orders for themselves
+        if (orderDto.UserId != authenticatedUserId)
+        {
+            _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to place order for different user ID: {RequestedUserId}", 
+                authenticatedUsername, authenticatedUserId, orderDto.UserId);
+            return Forbid("You can only place orders for yourself.");
+        }
+
+        _logger.LogInformation("Authenticated user {Username} placing order for UserId: {UserId}, Item: {Item}", 
+            authenticatedUsername, orderDto.UserId, orderDto.Item);
 
         try
         {
-            // Validate user by calling User Service
+            // Validate user by calling User Service (optional since user is already authenticated)
             var client = _httpClientFactory.CreateClient();
             var userServiceUrl = $"http://user-api:8081/user/{orderDto.UserId}";
             var response = await client.GetAsync(userServiceUrl);
@@ -94,14 +115,15 @@ public class OrderController : ControllerBase
             };
             await _publishEndpoint.Publish(orderPlacedEvent);
 
-            _logger.LogInformation("Order placed successfully. OrderId: {OrderId}, UserId: {UserId}", 
-                order.Id, order.UserId);
+            _logger.LogInformation("Order placed successfully by {Username}. OrderId: {OrderId}, UserId: {UserId}", 
+                authenticatedUsername, order.Id, order.UserId);
 
             return Ok(order);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error placing order for UserId: {UserId}", orderDto.UserId);
+            _logger.LogError(ex, "Error placing order for authenticated user {Username}, UserId: {UserId}", 
+                authenticatedUsername, orderDto.UserId);
             return StatusCode(500, "An error occurred while placing the order.");
         }
     }
@@ -112,36 +134,59 @@ public class OrderController : ControllerBase
     /// <param name="id">The order ID to track</param>
     /// <returns>Order details with current status and location</returns>
     /// <response code="200">Order found and returned</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - You can only track your own orders</response>
     /// <response code="404">Order not found</response>
     [HttpGet("track/{id}")]
+    [Authorize(Policy = "CustomerOrAdmin")]
     [ProducesResponseType(typeof(Order), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(404)]
     public async Task<IActionResult> TrackOrder([Range(1, int.MaxValue)] int id)
     {
-        _logger.LogInformation("Tracking order with OrderId: {OrderId}", id);
+        var authenticatedUserId = GetAuthenticatedUserId();
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        _logger.LogInformation("User {Username} tracking order with OrderId: {OrderId}", authenticatedUsername, id);
+
         var order = await _context.Orders.FindAsync(id);
         
         if (order == null)
         {
-            _logger.LogWarning("Order not found. OrderId: {OrderId}", id);
+            _logger.LogWarning("Order not found. OrderId: {OrderId}, RequestedBy: {Username}", id, authenticatedUsername);
             return NotFound($"Order with ID {id} not found.");
+        }
+
+        // Security check: Users can only track their own orders (unless they're admin)
+        if (userRole != "Admin" && order.UserId != authenticatedUserId)
+        {
+            _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to track order {OrderId} belonging to user {OrderUserId}", 
+                authenticatedUsername, authenticatedUserId, id, order.UserId);
+            return Forbid("You can only track your own orders.");
         }
 
         return Ok(order);
     }
 
     /// <summary>
-    /// Updates the status of an existing order
+    /// Updates the status of an existing order (Admin or Delivery Partner only)
     /// </summary>
     /// <param name="update">Status update information</param>
     /// <returns>Updated order details</returns>
     /// <response code="200">Order status updated successfully</response>
     /// <response code="400">Invalid update data</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - Admin or DeliveryPartner role required</response>
     /// <response code="404">Order not found</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpPost("update-status")]
+    [Authorize(Roles = "Admin,DeliveryPartner")]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(typeof(string), 400)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(typeof(string), 404)]
     [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> UpdateOrderStatus([FromBody] OrderStatusUpdateDto update, [FromServices] IHubContext<OrderTrackingHub> hubContext)
@@ -151,15 +196,19 @@ public class OrderController : ControllerBase
             return BadRequest(ModelState);
         }
 
-        _logger.LogInformation("Updating order status. OrderId: {OrderId}, NewStatus: {Status}", 
-            update.OrderId, update.Status);
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        _logger.LogInformation("User {Username} (Role: {Role}) updating order status. OrderId: {OrderId}, NewStatus: {Status}", 
+            authenticatedUsername, userRole, update.OrderId, update.Status);
 
         try
         {
             var order = await _context.Orders.FindAsync(update.OrderId);
             if (order == null) 
             {
-                _logger.LogWarning("Order not found for status update. OrderId: {OrderId}", update.OrderId);
+                _logger.LogWarning("Order not found for status update. OrderId: {OrderId}, RequestedBy: {Username}", 
+                    update.OrderId, authenticatedUsername);
                 return NotFound($"Order with ID {update.OrderId} not found.");
             }
 
@@ -184,32 +233,40 @@ public class OrderController : ControllerBase
                 {
                     OrderId = order.Id,
                     Status = order.Status,
+                    UpdatedBy = authenticatedUsername,
+                    UpdatedAt = DateTime.UtcNow
                 });
 
-            _logger.LogInformation("Order status updated successfully. OrderId: {OrderId}, OldStatus: {OldStatus}, NewStatus: {NewStatus}", 
-                order.Id, oldStatus, order.Status);
+            _logger.LogInformation("Order status updated successfully by {Username}. OrderId: {OrderId}, OldStatus: {OldStatus}, NewStatus: {NewStatus}", 
+                authenticatedUsername, order.Id, oldStatus, order.Status);
 
             return Ok(order);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error updating order status. OrderId: {OrderId}", update.OrderId);
+            _logger.LogError(ex, "Error updating order status. OrderId: {OrderId}, RequestedBy: {Username}", 
+                update.OrderId, authenticatedUsername);
             return StatusCode(500, "An error occurred while updating order status.");
         }
     }
 
     /// <summary>
-    /// Updates the delivery location for an order
+    /// Updates the delivery location for an order (Delivery Partner only)
     /// </summary>
     /// <param name="update">Location update information with coordinates</param>
     /// <returns>Updated order with new ETA calculation</returns>
     /// <response code="200">Location updated successfully</response>
     /// <response code="400">Invalid location data</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - DeliveryPartner role required</response>
     /// <response code="404">Order not found</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpPost("update-location")]
+    [Authorize(Policy = "DeliveryPartnerOnly")]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(typeof(string), 400)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(typeof(string), 404)]
     [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> UpdateDeliveryLocation(
@@ -221,15 +278,18 @@ public class OrderController : ControllerBase
             return BadRequest(ModelState);
         }
 
-        _logger.LogInformation("Updating delivery location. OrderId: {OrderId}, Latitude: {Latitude}, Longitude: {Longitude}", 
-            update.OrderId, update.Latitude, update.Longitude);
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+
+        _logger.LogInformation("Delivery partner {Username} updating location. OrderId: {OrderId}, Latitude: {Latitude}, Longitude: {Longitude}", 
+            authenticatedUsername, update.OrderId, update.Latitude, update.Longitude);
 
         try
         {
             var order = await _context.Orders.FindAsync(update.OrderId);
             if (order == null) 
             {
-                _logger.LogWarning("Order not found for location update. OrderId: {OrderId}", update.OrderId);
+                _logger.LogWarning("Order not found for location update. OrderId: {OrderId}, RequestedBy: {Username}", 
+                    update.OrderId, authenticatedUsername);
                 return NotFound($"Order with ID {update.OrderId} not found.");
             }
 
@@ -260,17 +320,20 @@ public class OrderController : ControllerBase
                     OrderId = order.Id,
                     Latitude = order.DeliveryLatitude,
                     Longitude = order.DeliveryLongitude,
-                    ETA = order.ETA
+                    ETA = order.ETA,
+                    UpdatedBy = authenticatedUsername,
+                    UpdatedAt = DateTime.UtcNow
                 });
 
-            _logger.LogInformation("Delivery location updated successfully. OrderId: {OrderId}, ETA: {ETA} minutes", 
-                order.Id, order.ETA);
+            _logger.LogInformation("Delivery location updated successfully by {Username}. OrderId: {OrderId}, ETA: {ETA} minutes", 
+                authenticatedUsername, order.Id, order.ETA);
 
             return Ok(order);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error updating delivery location. OrderId: {OrderId}", update.OrderId);
+            _logger.LogError(ex, "Error updating delivery location. OrderId: {OrderId}, RequestedBy: {Username}", 
+                update.OrderId, authenticatedUsername);
             return StatusCode(500, "An error occurred while updating delivery location.");
         }
     }
@@ -281,29 +344,54 @@ public class OrderController : ControllerBase
     /// <param name="orderId">The order ID to get timeline for</param>
     /// <returns>List of order history entries ordered by timestamp</returns>
     /// <response code="200">Timeline retrieved successfully</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - You can only view timeline for your own orders</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpGet("timeline/{orderId}")]
+    [Authorize(Policy = "CustomerOrAdmin")]
     [ProducesResponseType(typeof(List<OrderHistory>), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> GetOrderTimeline([Range(1, int.MaxValue)] int orderId)
     {
-        _logger.LogInformation("Fetching order timeline. OrderId: {OrderId}", orderId);
+        var authenticatedUserId = GetAuthenticatedUserId();
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        _logger.LogInformation("User {Username} fetching order timeline. OrderId: {OrderId}", authenticatedUsername, orderId);
 
         try
         {
+            // First check if order exists and user has permission
+            var order = await _context.Orders.FindAsync(orderId);
+            if (order == null)
+            {
+                return NotFound($"Order with ID {orderId} not found.");
+            }
+
+            // Security check: Users can only view timeline for their own orders (unless they're admin)
+            if (userRole != "Admin" && order.UserId != authenticatedUserId)
+            {
+                _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to view timeline for order {OrderId} belonging to user {OrderUserId}", 
+                    authenticatedUsername, authenticatedUserId, orderId, order.UserId);
+                return Forbid("You can only view timeline for your own orders.");
+            }
+
             var history = await _context.OrderHistories
                 .Where(h => h.OrderId == orderId)
                 .OrderBy(h => h.Timestamp)
                 .ToListAsync();
 
-            _logger.LogInformation("Order timeline fetched successfully. OrderId: {OrderId}, HistoryCount: {Count}", 
-                orderId, history.Count);
+            _logger.LogInformation("Order timeline fetched successfully by {Username}. OrderId: {OrderId}, HistoryCount: {Count}", 
+                authenticatedUsername, orderId, history.Count);
 
             return Ok(history);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error fetching order timeline. OrderId: {OrderId}", orderId);
+            _logger.LogError(ex, "Error fetching order timeline. OrderId: {OrderId}, RequestedBy: {Username}", 
+                orderId, authenticatedUsername);
             return StatusCode(500, "An error occurred while fetching order timeline.");
         }
     }
@@ -314,13 +402,30 @@ public class OrderController : ControllerBase
     /// <param name="userId">The user ID to get recommendations for</param>
     /// <returns>List of recommended items with order frequency</returns>
     /// <response code="200">Recommendations retrieved successfully</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - You can only get recommendations for yourself</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpGet("recommendations/{userId}")]
+    [Authorize(Policy = "CustomerOrAdmin")]
     [ProducesResponseType(typeof(List<RecommendationDto>), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> GetRecommendations([Range(1, int.MaxValue)] int userId)
     {
-        _logger.LogInformation("Fetching recommendations for UserId: {UserId}", userId);
+        var authenticatedUserId = GetAuthenticatedUserId();
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        // Security check: Users can only get recommendations for themselves (unless they're admin)
+        if (userRole != "Admin" && userId != authenticatedUserId)
+        {
+            _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to get recommendations for different user ID: {RequestedUserId}", 
+                authenticatedUsername, authenticatedUserId, userId);
+            return Forbid("You can only get recommendations for yourself.");
+        }
+
+        _logger.LogInformation("User {Username} fetching recommendations for UserId: {UserId}", authenticatedUsername, userId);
 
         try
         {
@@ -337,16 +442,26 @@ public class OrderController : ControllerBase
                 .Take(5)
                 .ToListAsync();
 
-            _logger.LogInformation("Recommendations fetched successfully. UserId: {UserId}, RecommendationCount: {Count}", 
-                userId, recommendations.Count);
+            _logger.LogInformation("Recommendations fetched successfully by {Username}. UserId: {UserId}, RecommendationCount: {Count}", 
+                authenticatedUsername, userId, recommendations.Count);
 
             return Ok(recommendations);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error fetching recommendations. UserId: {UserId}", userId);
+            _logger.LogError(ex, "Error fetching recommendations. UserId: {UserId}, RequestedBy: {Username}", 
+                userId, authenticatedUsername);
             return StatusCode(500, "An error occurred while fetching recommendations.");
         }
+    }
+
+    /// <summary>
+    /// Helper method to get authenticated user ID from JWT claims
+    /// </summary>
+    private int GetAuthenticatedUserId()
+    {
+        var userIdClaim = User.FindFirst("userId") ?? User.FindFirst(ClaimTypes.NameIdentifier);
+        return int.Parse(userIdClaim?.Value ?? "0");
     }
 
     private int CalculateEta(double fromLat, double fromLng, double toLat, double toLng, double avgSpeedKmh = 30)
