@@ -4,25 +4,33 @@
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
 WORKDIR /app
 
-EXPOSE 8081
-
-# Build image
+# Use the SDK image to build the app
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-ARG BUILD_CONFIGURATION=Debug
 WORKDIR /src
-COPY ["UserService.csproj", "."]
-RUN dotnet restore "./UserService.csproj"
-COPY . .
-WORKDIR "/src/."
-RUN dotnet build "./UserService.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
-# Publish image
-FROM build AS publish
-ARG BUILD_CONFIGURATION=Debug
-RUN dotnet publish "./UserService.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+# Copy the project file and restore dependencies
+COPY ["*.csproj", "./"]
+RUN dotnet restore
 
-# Final image
+# Copy the rest of the application code
+COPY . ./
+
+# Build the application
+RUN dotnet publish -c Release -o /app/publish
+
+# Use the base image for the final stage
 FROM base AS final
 WORKDIR /app
-COPY --from=publish /app/publish .
+
+# Copy the published application
+COPY --from=build /app/publish .
+
+# Set environment variables for Render.com
+ENV ASPNETCORE_URLS=http://+:$PORT
+ENV ASPNETCORE_ENVIRONMENT=Production
+
+# Expose the port (Render.com will set the PORT environment variable)
+EXPOSE $PORT
+
+# Start the application
 ENTRYPOINT ["dotnet", "UserService.dll"]

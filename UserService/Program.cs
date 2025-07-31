@@ -9,42 +9,81 @@ namespace UserService
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Add services to the container.
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+                {
+                    Title = "User Service API",
+                    Version = "v1",
+                    Description = "User management microservice deployed on Render.com"
+                });
+            });
 
+            // Database configuration for Render.com PostgreSQL
+            var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+            var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
             
+            if (!string.IsNullOrEmpty(databaseUrl))
+            {
+                connectionString = databaseUrl;
+            }
 
             builder.Services.AddDbContext<UserDbContext>(options =>
-                options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+                options.UseNpgsql(connectionString));
+
+            // Add CORS for API access
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAll", policy =>
+                {
+                    policy.AllowAnyOrigin()
+                          .AllowAnyMethod()
+                          .AllowAnyHeader();
+                });
+            });
 
             var app = builder.Build();
 
-            // Apply database migrations with retry logic
-            using (var scope = app.Services.CreateScope())
+            // Database migration
+            try
             {
-                var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
-                            db.Database.Migrate();
-                    }
+                using var scope = app.Services.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<UserDbContext>();
+                context.Database.Migrate();
+                Console.WriteLine("Database migration completed successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Database migration failed: {ex.Message}");
+            }
 
-            // Configure the HTTP request pipeline.
-           
-                app.UseSwagger();
-                app.UseSwaggerUI();
+            // Enable Swagger for all environments
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "User Service API V1");
+                c.RoutePrefix = "swagger";
+            });
 
-
-                app.UseHttpsRedirection();
-
+            app.UseCors("AllowAll");
             app.UseAuthorization();
-
-           
             app.MapControllers();
 
-            var logger = app.Services.GetRequiredService<ILogger<Program>>();
-            logger.LogInformation("UserService starting in {Environment} environment on ports 8081", app.Environment.EnvironmentName);
+            // Root endpoint
+            app.MapGet("/", () => new { 
+                service = "UserService", 
+                status = "running",
+                platform = "Render.com",
+                swagger = "/swagger",
+                timestamp = DateTime.UtcNow 
+            });
 
-            app.Run();
+            var port = Environment.GetEnvironmentVariable("PORT") ?? "8081";
+            Console.WriteLine($"UserService starting on port {port}");
+
+            app.Run($"http://0.0.0.0:{port}");
         }
     }
 }
