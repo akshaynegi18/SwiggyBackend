@@ -210,6 +210,14 @@ app.UseSwaggerUI(c =>
 app.UseAuthentication();
 app.UseAuthorization();
 
+
+
+// Configure CORS
+app.UseCors(policy =>
+    policy.AllowAnyOrigin()
+          .AllowAnyMethod()
+          .AllowAnyHeader());
+
 app.MapControllers();
 app.MapHub<OrderTrackingHub>("/order-tracking-hub");
 app.MapGet("/", () => "OrderService is running 🚀");
