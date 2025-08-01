@@ -1,7 +1,7 @@
 services:
   # UserService
   - type: web
-    name: userservice
+    name: swiggy-userservice
     runtime: docker
     plan: free
     dockerfilePath: ./UserService/Dockerfile
@@ -13,12 +13,12 @@ services:
         value: http://+:$PORT
       - key: DATABASE_URL
         fromDatabase:
-          name: userservice-db
+          name: swiggy-userservice-db
           property: connectionString
 
-  # OrderService  
+  # OrderService
   - type: web
-    name: orderservice
+    name: swiggy-orderservice
     runtime: docker
     plan: free
     dockerfilePath: ./OrderService/Dockerfile
@@ -30,12 +30,12 @@ services:
         value: http://+:$PORT
       - key: DATABASE_URL
         fromDatabase:
-          name: orderservice-db
+          name: swiggy-orderservice-db
           property: connectionString
 
   # NotificationService
   - type: web
-    name: notificationservice
+    name: swiggy-notificationservice
     runtime: docker
     plan: free
     dockerfilePath: ./NotificationService/Dockerfile
@@ -47,10 +47,10 @@ services:
         value: http://+:$PORT
 
 databases:
-  - name: userservice-db
-    databaseName: userdb
+  - name: swiggy-userservice-db
+    databaseName: swiggy_userdb
     plan: free
 
-  - name: orderservice-db
-    databaseName: orderdb
+  - name: swiggy-orderservice-db
+    databaseName: swiggy_orderdb
     plan: free
