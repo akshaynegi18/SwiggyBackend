@@ -1,56 +1,56 @@
 using MassTransit;
 
+var builder = WebApplication.CreateBuilder(args);
 
-namespace NotificationService
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
 {
-    public class Program
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
     {
-        public static void Main(string[] args)
-        {
-            var builder = WebApplication.CreateBuilder(args);
+        Title = "Notification Service API",
+        Version = "v1",
+        Description = "Notification microservice deployed on Render.com"
+    });
+});
 
-            // Add services to the container.
+// Simplified MassTransit for Render.com
+builder.Services.AddMassTransit(x =>
+{
+    // Use in-memory transport (RabbitMQ not available on free tier)
+    x.UsingInMemory((context, cfg) =>
+    {
+        cfg.ConfigureEndpoints(context);
+    });
+});
 
-            builder.Services.AddControllers();
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-            builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+// Add CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
 
-            // MassTransit + RabbitMQ setup
-            builder.Services.AddMassTransit(x =>
-            {
-                x.AddConsumer<OrderPlacedEventConsumer>();
-                x.UsingRabbitMq((context, cfg) =>
-                {
-                    cfg.Host("rabbitmq", "/", h =>
-                    {
-                        h.Username("guest");
-                        h.Password("guest");
-                    });
-                    cfg.ReceiveEndpoint("order-placed-notificationservice", e =>
-                    {
-                        e.ConfigureConsumer<OrderPlacedEventConsumer>(context);
-                    });
-                });
-            });
+var app = builder.Build();
 
-            var app = builder.Build();
+app.UseSwagger();
+app.UseSwaggerUI();
+app.UseCors("AllowAll");
+app.MapControllers();
 
-            // Configure the HTTP request pipeline.
-            if (app.Environment.IsDevelopment())
-            {
-                app.UseSwagger();
-                app.UseSwaggerUI();
-            }
+// Root endpoint
+app.MapGet("/", () => new { 
+    service = "NotificationService", 
+    status = "running",
+    platform = "Render.com",
+    timestamp = DateTime.UtcNow 
+});
 
-            app.UseHttpsRedirection();
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8082";
+Console.WriteLine($"NotificationService starting on port {port}");
 
-            app.UseAuthorization();
-
-
-            app.MapControllers();
-
-            app.Run();
-        }
-    }
-}
+app.Run($"http://0.0.0.0:{port}");

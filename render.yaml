@@ -13,7 +13,7 @@ services:
         value: http://+:$PORT
       - key: DATABASE_URL
         fromDatabase:
-          name: swiggy-userservice-db
+          name: swiggy-shared-db
           property: connectionString
 
   # OrderService
@@ -30,7 +30,7 @@ services:
         value: http://+:$PORT
       - key: DATABASE_URL
         fromDatabase:
-          name: swiggy-orderservice-db
+          name: swiggy-shared-db
           property: connectionString
 
   # NotificationService
@@ -47,10 +47,6 @@ services:
         value: http://+:$PORT
 
 databases:
-  - name: swiggy-userservice-db
-    databaseName: swiggy_userdb
-    plan: free
-
-  - name: swiggy-orderservice-db
-    databaseName: swiggy_orderdb
+  - name: swiggy-shared-db
+    databaseName: swiggy_main
     plan: free
