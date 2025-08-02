@@ -15,11 +15,13 @@ public class UserController : ControllerBase
 {
     private readonly UserDbContext _context;
     private readonly ILogger<UserController> _logger;
+    private readonly IConfiguration _configuration;
 
-    public UserController(UserDbContext context, ILogger<UserController> logger)
+    public UserController(UserDbContext context, ILogger<UserController> logger, IConfiguration configuration)
     {
         _context = context;
         _logger = logger;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -51,6 +53,17 @@ public class UserController : ControllerBase
     }
 
     /// <summary>
+    /// Health check endpoint
+    /// </summary>
+    /// <returns>Service health status</returns>
+    [HttpGet("health")]
+    [ProducesResponseType(200)]
+    public IActionResult Health()
+    {
+        return Ok(new { status = "healthy", service = "UserService", timestamp = DateTime.UtcNow });
+    }
+
+    /// <summary>
     /// Register a new user
     /// </summary>
     /// <param name="request">User registration details</param>
@@ -78,8 +91,8 @@ public class UserController : ControllerBase
             return Conflict("Username or email already exists");
         }
 
-        // Hash password
-        var hashedPassword = HashPassword(request.Password);
+        // Hash password with salt
+        var (hashedPassword, salt) = HashPasswordWithSalt(request.Password);
 
         var user = new User
         {
@@ -170,7 +183,7 @@ public class UserController : ControllerBase
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.Username == request.Username && u.IsActive);
 
-        if (user == null || !VerifyPassword(request.Password, user.PasswordHash))
+        if (user == null || !VerifyPasswordWithSalt(request.Password, user.PasswordHash))
         {
             _logger.LogWarning("Invalid credentials for user: {Username}", request.Username);
             return Unauthorized("Invalid username or password");
@@ -305,7 +318,30 @@ public class UserController : ControllerBase
         return Ok(users);
     }
 
-    // Helper methods for password hashing
+    // Improved password hashing with salt for production security
+    private (string hashedPassword, string salt) HashPasswordWithSalt(string password)
+    {
+        var salt = GetPasswordSalt();
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(salt));
+        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(password));
+        return (Convert.ToBase64String(hash), salt);
+    }
+
+    private bool VerifyPasswordWithSalt(string password, string storedHash)
+    {
+        var salt = GetPasswordSalt();
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(salt));
+        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(password));
+        var computedHash = Convert.ToBase64String(hash);
+        return computedHash == storedHash;
+    }
+
+    private string GetPasswordSalt()
+    {
+        return _configuration["Security:PasswordSalt"] ?? "FoodDeliveryApp_DefaultSalt_2024";
+    }
+
+    // Legacy methods for backward compatibility
     private string HashPassword(string password)
     {
         using var sha256 = SHA256.Create();
