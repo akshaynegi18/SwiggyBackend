@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using OrderService.Data;
+using OrderService.Services; // Add this using statement
 using MassTransit;
 using System.Text.RegularExpressions;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,8 +29,21 @@ if (!string.IsNullOrEmpty(databaseUrl))
     connectionString = ParsePostgreSqlUrl(databaseUrl);
 }
 
+// Ensure we have a valid connection string
+if (string.IsNullOrEmpty(connectionString))
+{
+    connectionString = "Host=localhost;Database=OrderDb;Username=postgres;Password=password";
+    Console.WriteLine("Using default connection string");
+}
+
 builder.Services.AddDbContext<OrderDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+// Add HttpClient for external service calls
+builder.Services.AddHttpClient();
+
+// Register the authentication service
+builder.Services.AddScoped<OrderService.Services.IAuthenticationService, AuthenticationService>();
 
 // Simplified MassTransit configuration
 builder.Services.AddMassTransit(x =>
@@ -96,7 +111,7 @@ app.MapGet("/", () => new {
     status = "running",
     platform = "Render.com",
     swagger = "/swagger",
-    database = connectionString != null ? "configured" : "not configured",
+    database = !string.IsNullOrEmpty(connectionString) ? "configured" : "not configured",
     timestamp = DateTime.UtcNow 
 });
 
@@ -106,7 +121,7 @@ Console.WriteLine($"OrderService starting on port {port}");
 app.Run($"http://0.0.0.0:{port}");
 
 // Helper method to parse PostgreSQL URL
-static string ParsePostgreSqlUrl(string databaseUrl)
+static string? ParsePostgreSqlUrl(string databaseUrl)
 {
     try
     {
@@ -124,12 +139,18 @@ static string ParsePostgreSqlUrl(string databaseUrl)
     catch (Exception ex)
     {
         Console.WriteLine($"Failed to parse database URL: {ex.Message}");
-        return "Host=localhost;Database=OrderDb;Username=postgres;Password=password";
+        return null; // Return null instead of fallback connection string
     }
 }
 
 static string GetHostFromConnectionString(string connectionString)
 {
+    // Handle null or empty connection string
+    if (string.IsNullOrEmpty(connectionString))
+    {
+        return "unknown";
+    }
+
     try
     {
         var match = Regex.Match(connectionString, @"Host=([^;]+)");

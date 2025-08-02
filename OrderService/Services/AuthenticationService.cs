@@ -1,25 +1,27 @@
-using Microsoft.IdentityModel.Tokens;
-using OrderService.Configuration;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Microsoft.IdentityModel.Tokens;
 
 namespace OrderService.Services;
 
 public class AuthenticationService : IAuthenticationService
 {
-    private readonly JwtSettings _jwtSettings;
-    private readonly ILogger<AuthenticationService> _logger;
+    private readonly IConfiguration _configuration;
 
-    public AuthenticationService(JwtSettings jwtSettings, ILogger<AuthenticationService> logger)
+    public AuthenticationService(IConfiguration configuration)
     {
-        _jwtSettings = jwtSettings;
-        _logger = logger;
+        _configuration = configuration;
     }
 
     public string GenerateJwtToken(int userId, string userName, string role)
     {
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.SecretKey));
+        var jwtSettings = _configuration.GetSection("JwtSettings");
+        var secretKey = jwtSettings["SecretKey"] ?? "your-fallback-secret-key-here";
+        var issuer = jwtSettings["Issuer"] ?? "OrderService";
+        var audience = jwtSettings["Audience"] ?? "OrderService";
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
         var claims = new[]
@@ -27,41 +29,39 @@ public class AuthenticationService : IAuthenticationService
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(ClaimTypes.Name, userName),
             new Claim(ClaimTypes.Role, role),
-            new Claim("userId", userId.ToString()),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
         var token = new JwtSecurityToken(
-            issuer: _jwtSettings.Issuer,
-            audience: _jwtSettings.Audience,
+            issuer: issuer,
+            audience: audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationMinutes),
+            expires: DateTime.UtcNow.AddMinutes(60),
             signingCredentials: credentials
         );
 
-        var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
-        
-        _logger.LogInformation("JWT token generated for UserId: {UserId}, Role: {Role}", userId, role);
-        
-        return tokenString;
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
     public ClaimsPrincipal? ValidateToken(string token)
     {
         try
         {
+            var jwtSettings = _configuration.GetSection("JwtSettings");
+            var secretKey = jwtSettings["SecretKey"] ?? "your-fallback-secret-key-here";
+            
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
             var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.UTF8.GetBytes(_jwtSettings.SecretKey);
 
             var validationParameters = new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(key),
+                IssuerSigningKey = key,
                 ValidateIssuer = true,
-                ValidIssuer = _jwtSettings.Issuer,
+                ValidIssuer = jwtSettings["Issuer"] ?? "OrderService",
                 ValidateAudience = true,
-                ValidAudience = _jwtSettings.Audience,
+                ValidAudience = jwtSettings["Audience"] ?? "OrderService",
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.Zero
             };
@@ -69,9 +69,8 @@ public class AuthenticationService : IAuthenticationService
             var principal = tokenHandler.ValidateToken(token, validationParameters, out SecurityToken validatedToken);
             return principal;
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogWarning(ex, "Token validation failed");
             return null;
         }
     }
