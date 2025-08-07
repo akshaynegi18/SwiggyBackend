@@ -17,7 +17,10 @@ namespace UserService
             
 
             builder.Services.AddDbContext<UserDbContext>(options =>
-                options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+                options.UseSqlServer(
+                    builder.Configuration.GetConnectionString("DefaultConnection"),
+                    sqlOptions => sqlOptions.EnableRetryOnFailure()
+                ));
 
             var app = builder.Build();
 
