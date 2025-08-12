@@ -80,15 +80,13 @@ public class OrderController : ControllerBase
         try
         {
             // Validate user by calling User Service (optional since user is already authenticated)
-            var client = _httpClientFactory.CreateClient();
-            var userServiceUrl = $"http://user-api:8081/user/{orderDto.UserId}";
-            var response = await client.GetAsync(userServiceUrl);
+            var httpClient = _httpClientFactory.CreateClient("UserService");
+            var userResponse = await httpClient.GetAsync($"/users/{orderDto.UserId}");
 
-            if (!response.IsSuccessStatusCode)
+            if (!userResponse.IsSuccessStatusCode)
             {
-                _logger.LogWarning("User validation failed for UserId: {UserId}, StatusCode: {StatusCode}", 
-                    orderDto.UserId, response.StatusCode);
-                return BadRequest("Invalid user.");
+                _logger.LogWarning("User validation failed for UserId: {UserId}. StatusCode: {StatusCode}", orderDto.UserId, userResponse.StatusCode);
+                return BadRequest("User does not exist or could not be validated.");
             }
 
             var order = new Order
@@ -137,43 +135,77 @@ public class OrderController : ControllerBase
     /// <response code="401">Unauthorized - JWT token required</response>
     /// <response code="403">Forbidden - You can only track your own orders</response>
     /// <response code="404">Order not found</response>
+    /// <response code="500">Internal server error</response>
     [HttpGet("track/{id}")]
     [Authorize(Policy = "CustomerOrAdmin")]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(401)]
     [ProducesResponseType(403)]
     [ProducesResponseType(404)]
+    [ProducesResponseType(typeof(string), 500)]
     public async Task<IActionResult> TrackOrder([Range(1, int.MaxValue)] int id)
     {
-        var authenticatedUserId = GetAuthenticatedUserId();
-        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
-        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
-
-        _logger.LogInformation("User {Username} tracking order with OrderId: {OrderId}", authenticatedUsername, id);
-
-        var order = await _context.Orders.FindAsync(id);
+        var authenticatedUsername = "Unknown";
+        var authenticatedUserId = 0;
+        var userRole = "Unknown";
         
-        if (order == null)
+        try
         {
-            _logger.LogWarning("Order not found. OrderId: {OrderId}, RequestedBy: {Username}", id, authenticatedUsername);
-            return NotFound($"Order with ID {id} not found.");
-        }
+            _logger.LogInformation("Starting order tracking request for OrderId: {OrderId}", id);
+            
+            authenticatedUserId = GetAuthenticatedUserId();
+            authenticatedUsername = User.Identity?.Name ?? "Unknown";
+            userRole = User.FindFirst(ClaimTypes.Role)?.Value ?? "Unknown";
 
-        // Security check: Users can only track their own orders (unless they're admin)
-        if (userRole != "Admin" && order.UserId != authenticatedUserId)
+            _logger.LogInformation("User {Username} (ID: {UserId}, Role: {Role}) tracking order with OrderId: {OrderId}", 
+                authenticatedUsername, authenticatedUserId, userRole, id);
+
+            var order = await _context.Orders.FindAsync(id);
+            
+            if (order == null)
+            {
+                _logger.LogWarning("Order not found. OrderId: {OrderId}, RequestedBy: {Username} (ID: {UserId})", 
+                    id, authenticatedUsername, authenticatedUserId);
+                return NotFound($"Order with ID {id} not found.");
+            }
+
+            _logger.LogInformation("Order found. OrderId: {OrderId}, OrderUserId: {OrderUserId}, OrderStatus: {Status}, RequestedBy: {Username}", 
+                id, order.UserId, order.Status, authenticatedUsername);
+
+            // Security check: Users can only track their own orders (unless they're admin)
+            if (userRole != "Admin" && order.UserId != authenticatedUserId)
+            {
+                _logger.LogWarning("Unauthorized order tracking attempt. User {Username} (ID: {AuthUserId}, Role: {Role}) attempted to track order {OrderId} belonging to user {OrderUserId}", 
+                    authenticatedUsername, authenticatedUserId, userRole, id, order.UserId);
+                return Forbid("You can only track your own orders.");
+            }
+
+            _logger.LogInformation("Order tracking successful. OrderId: {OrderId}, RequestedBy: {Username}, OrderStatus: {Status}, ETA: {ETA}", 
+                id, authenticatedUsername, order.Status, order.ETA);
+
+            return Ok(order);
+        }
+        catch (Exception ex)
         {
-            _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to track order {OrderId} belonging to user {OrderUserId}", 
-                authenticatedUsername, authenticatedUserId, id, order.UserId);
-            return Forbid("You can only track your own orders.");
+            _logger.LogError(ex, "Error tracking order. OrderId: {OrderId}, RequestedBy: {Username} (ID: {UserId}, Role: {Role}), ErrorType: {ErrorType}, ErrorMessage: {ErrorMessage}", 
+                id, authenticatedUsername, authenticatedUserId, userRole, ex.GetType().Name, ex.Message);
+            
+            // Log additional details for database-related errors
+            if (ex is InvalidOperationException || ex.InnerException != null)
+            {
+                _logger.LogError("Additional error details - InnerException: {InnerException}, StackTrace: {StackTrace}", 
+                    ex.InnerException?.Message ?? "None", ex.StackTrace);
+            }
+            
+            return StatusCode(500, "An error occurred while tracking the order.");
         }
-
-        return Ok(order);
     }
 
     /// <summary>
     /// Updates the status of an existing order (Admin or Delivery Partner only)
     /// </summary>
     /// <param name="update">Status update information</param>
+    /// <param name="hubContext">SignalR hub context for broadcasting updates</param>
     /// <returns>Updated order details</returns>
     /// <response code="200">Order status updated successfully</response>
     /// <response code="400">Invalid update data</response>
@@ -254,6 +286,7 @@ public class OrderController : ControllerBase
     /// Updates the delivery location for an order (Delivery Partner only)
     /// </summary>
     /// <param name="update">Location update information with coordinates</param>
+    /// <param name="hubContext">SignalR hub context for broadcasting updates</param>
     /// <returns>Updated order with new ETA calculation</returns>
     /// <response code="200">Location updated successfully</response>
     /// <response code="400">Invalid location data</response>

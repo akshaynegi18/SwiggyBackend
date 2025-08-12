@@ -13,15 +13,18 @@ public class AuthController : ControllerBase
     private readonly IAuthenticationService _authService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<AuthController> _logger;
+    private readonly IConfiguration _configuration;
 
     public AuthController(
         IAuthenticationService authService, 
         IHttpClientFactory httpClientFactory,
-        ILogger<AuthController> logger)
+        ILogger<AuthController> logger,
+        IConfiguration configuration)
     {
         _authService = authService;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -104,7 +107,12 @@ public class AuthController : ControllerBase
         try
         {
             var client = _httpClientFactory.CreateClient();
-            var userServiceUrl = "http://user-api:8081/user/register";
+            
+            // Get UserService URL from environment variable/configuration
+            var userServiceBaseUrl = GetUserServiceUrl();
+            var userServiceUrl = $"{userServiceBaseUrl}/user/register";
+            
+            _logger.LogInformation("Calling UserService at: {UserServiceUrl}", userServiceUrl);
 
             var userServiceRequest = new
             {
@@ -165,7 +173,12 @@ public class AuthController : ControllerBase
         try
         {
             var client = _httpClientFactory.CreateClient();
-            var userServiceUrl = "http://user-api:8081/user/validate";
+            
+            // Get UserService URL from environment variable/configuration
+            var userServiceBaseUrl = GetUserServiceUrl();
+            var userServiceUrl = $"{userServiceBaseUrl}/user/validate";
+            
+            _logger.LogInformation("Validating user credentials at: {UserServiceUrl}", userServiceUrl);
 
             var validateRequest = new
             {
@@ -199,6 +212,20 @@ public class AuthController : ControllerBase
             _logger.LogError(ex, "Error validating user credentials for: {Username}", username);
             return (false, 0, "", "", "");
         }
+    }
+
+    private string GetUserServiceUrl()
+    {
+        // Try environment variable first (UserService__BaseUrl)
+        var userServiceUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl") 
+                           ?? _configuration["UserService:BaseUrl"]
+                           ?? "http://user-api:8081"; // Fallback for local development
+
+        // Remove trailing slash if present
+        userServiceUrl = userServiceUrl.TrimEnd('/');
+        
+        _logger.LogInformation("Using UserService URL: {UserServiceUrl}", userServiceUrl);
+        return userServiceUrl;
     }
 }
 

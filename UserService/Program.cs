@@ -7,6 +7,9 @@ namespace UserService
     {
         public static void Main(string[] args)
         {
+            Console.WriteLine("=== OrderService Container Started ===");
+            Console.WriteLine($"Current Time: {DateTime.UtcNow}");
+            Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}");
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
