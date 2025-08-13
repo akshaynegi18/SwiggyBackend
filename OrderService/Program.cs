@@ -52,7 +52,7 @@ try
     Console.WriteLine("Configuring Kestrel...");
     builder.WebHost.ConfigureKestrel(serverOptions =>
     {
-        serverOptions.ListenAnyIP(8081);
+        serverOptions.ListenAnyIP(8080);
     });
 
     builder.Services.AddEndpointsApiExplorer();

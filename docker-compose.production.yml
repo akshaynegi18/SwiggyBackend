@@ -1,0 +1,27 @@
+services:
+  order-api:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - SKIP_DB_MIGRATION=true
+      # These will be set via Azure environment variables:
+      # - ConnectionStrings__DefaultConnection
+      # - RabbitMQ__Host
+      # - JwtSettings__SecretKey
+    
+  user-api:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8081
+      - SKIP_DB_MIGRATION=true
+      # - ConnectionStrings__DefaultConnection
+      
+  notification-api:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8082
+      # - RabbitMQ__Host
+
+# Remove local services for cloud deployment
+  sqlserver: !reset null
+  rabbitmq: !reset null

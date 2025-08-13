@@ -7,9 +7,10 @@ namespace UserService
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine("=== OrderService Container Started ===");
+            Console.WriteLine("=== UserService Container Started ==="); // Fixed from OrderService
             Console.WriteLine($"Current Time: {DateTime.UtcNow}");
             Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}");
+            
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
@@ -17,38 +18,70 @@ namespace UserService
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
+            // Fix: Support environment variable override
+            var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection") 
+                                 ?? builder.Configuration.GetConnectionString("DefaultConnection");
             
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                throw new InvalidOperationException("Database connection string is required");
+            }
+
+            Console.WriteLine($"Using connection string: {connectionString}");
 
             builder.Services.AddDbContext<UserDbContext>(options =>
-                options.UseSqlServer(
-                    builder.Configuration.GetConnectionString("DefaultConnection"),
-                    sqlOptions => sqlOptions.EnableRetryOnFailure()
-                ));
+                options.UseSqlServer(connectionString, sqlOptions => 
+                {
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(30),
+                        errorNumbersToAdd: null);
+                    sqlOptions.CommandTimeout(30);
+                }));
 
             var app = builder.Build();
 
-            // Apply database migrations with retry logic
-            using (var scope = app.Services.CreateScope())
+            // Fix: Add proper retry logic for database migrations
+            var skipMigration = Environment.GetEnvironmentVariable("SKIP_DB_MIGRATION")?.ToLower() == "true";
+            
+            if (!skipMigration)
             {
-                var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
-                            db.Database.Migrate();
+                using (var scope = app.Services.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
+                    try
+                    {
+                        Console.WriteLine("Applying database migrations...");
+                        db.Database.Migrate();
+                        Console.WriteLine("Database migrations completed successfully!");
                     }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Database migration failed: {ex.Message}");
+                        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+                        if (environment?.ToLower() != "production")
+                        {
+                            throw;
+                        }
+                    }
+                }
+            }
 
             // Configure the HTTP request pipeline.
-           
-                app.UseSwagger();
-                app.UseSwaggerUI();
+            app.UseSwagger();
+            app.UseSwaggerUI();
 
-
-                app.UseHttpsRedirection();
+            // Fix: Remove HTTPS redirection for container environments
+            // app.UseHttpsRedirection(); // Comment out for Docker
 
             app.UseAuthorization();
-
-           
             app.MapControllers();
 
+            // Add health check
+            app.MapGet("/health", () => Results.Ok("Healthy"));
+
             var logger = app.Services.GetRequiredService<ILogger<Program>>();
-            logger.LogInformation("UserService starting in {Environment} environment on ports 8081", app.Environment.EnvironmentName);
+            logger.LogInformation("UserService starting in {Environment} environment on port 8081", app.Environment.EnvironmentName);
 
             app.Run();
         }

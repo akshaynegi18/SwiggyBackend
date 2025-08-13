@@ -5,10 +5,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
-    depends_on:
-      - sqlserver
-    environment:
-      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=OrderDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True;
 
   user-api:
     build:
@@ -16,11 +12,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8081:8081"
-    depends_on:
-      - sqlserver
-    environment:
-      - ASPNETCORE_URLS=http://+:8081
-      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=UserDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True
 
   notification-api:
     build:
@@ -28,27 +19,3 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8082:8082"
-    depends_on:
-      - rabbitmq
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:8082
-
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=DatabasePassword@123
-    ports:
-      - "14331:1433"
-    volumes:
-      - sqlvolume:/var/opt/mssql
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    ports:
-      - "15672:15672" # RabbitMQ Management UI
-      - "5672:5672"   # AMQP protocol
-
-volumes:
-  sqlvolume:
