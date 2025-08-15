@@ -19,7 +19,7 @@ namespace OrderService.Controllers;
 [ApiController]
 [Route("[controller]")]
 [Produces("application/json")]
-[Authorize] // Require authentication for all endpoints
+[Authorize]
 public class OrderController : ControllerBase
 {
     private readonly OrderDbContext _context;

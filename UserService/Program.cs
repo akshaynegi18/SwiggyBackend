@@ -7,24 +7,16 @@ namespace UserService
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine("=== UserService Container Started ===");
-            Console.WriteLine($"Current Time: {DateTime.UtcNow}");
-            Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}");
-            
             var builder = WebApplication.CreateBuilder(args);
 
-            // Configure Kestrel to listen on port 8080
-            Console.WriteLine("Configuring Kestrel...");
             builder.WebHost.ConfigureKestrel(serverOptions =>
             {
                 serverOptions.ListenAnyIP(8080);
             });
 
-            // Add services to the container.
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
             
-            // Fix: Configure Swagger with proper version specification
             builder.Services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
@@ -40,7 +32,6 @@ namespace UserService
                 });
             });
 
-            // Fix: Support environment variable override
             var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection") 
                                  ?? builder.Configuration.GetConnectionString("DefaultConnection");
             
@@ -48,8 +39,6 @@ namespace UserService
             {
                 throw new InvalidOperationException("Database connection string is required");
             }
-
-            Console.WriteLine($"Using connection string: {connectionString}");
 
             builder.Services.AddDbContext<UserDbContext>(options =>
                 options.UseSqlServer(connectionString, sqlOptions => 
@@ -63,7 +52,6 @@ namespace UserService
 
             var app = builder.Build();
 
-            // Fix: Add proper retry logic for database migrations
             var skipMigration = Environment.GetEnvironmentVariable("SKIP_DB_MIGRATION")?.ToLower() == "true";
             
             if (!skipMigration)
@@ -73,13 +61,10 @@ namespace UserService
                     var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
                     try
                     {
-                        Console.WriteLine("Applying database migrations...");
                         db.Database.Migrate();
-                        Console.WriteLine("Database migrations completed successfully!");
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Database migration failed: {ex.Message}");
                         var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
                         if (environment?.ToLower() != "production")
                         {

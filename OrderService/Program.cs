@@ -15,34 +15,20 @@ using OrderService.Services;
 using StackExchange.Redis;
 using OrderService.Events;
 
-// Early debugging - this should appear in Azure logs immediately
-Console.WriteLine("=== OrderService Container Started ===");
-Console.WriteLine($"Current Time: {DateTime.UtcNow}");
-Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}");
-
 try
 {
-    Console.WriteLine("Creating WebApplication builder...");
     var builder = WebApplication.CreateBuilder(args);
 
-    Console.WriteLine("Checking environment variables...");
     var connString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection") 
                     ?? builder.Configuration.GetConnectionString("DefaultConnection");
-    Console.WriteLine($"Connection String: {connString}");
-    Console.WriteLine($"Connection String exists: {!string.IsNullOrEmpty(connString)}");
     
     var jwtSecret = Environment.GetEnvironmentVariable("JwtSettings__SecretKey");
-    Console.WriteLine($"JWT Secret exists: {!string.IsNullOrEmpty(jwtSecret)}");
 
-    // Validate required configuration
     if (string.IsNullOrEmpty(connString))
     {
-        Console.WriteLine("ERROR: Database connection string is missing!");
         throw new InvalidOperationException("Database connection string is required but not provided.");
     }
 
-    Console.WriteLine("Configuring Serilog...");
-    // Configure Serilog
     builder.Host.UseSerilog((context, config) =>
     {
         config
@@ -51,20 +37,16 @@ try
             .WriteTo.Console();
     });
 
-    Console.WriteLine("Configuring Kestrel...");
     builder.WebHost.ConfigureKestrel(serverOptions =>
     {
-        serverOptions.ListenAnyIP(8081); // Change from 8080 to 8081
+        serverOptions.ListenAnyIP(8081);
     });
 
     builder.Services.AddEndpointsApiExplorer();
 
-    Console.WriteLine("Configuring JWT Settings...");
-    // Configure JWT Settings
     var jwtSettings = new JwtSettings();
     builder.Configuration.GetSection(JwtSettings.SectionName).Bind(jwtSettings);
     
-    // Override with environment variables if present
     if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("JwtSettings__SecretKey")))
     {
         jwtSettings.SecretKey = Environment.GetEnvironmentVariable("JwtSettings__SecretKey");
@@ -78,25 +60,18 @@ try
         jwtSettings.Audience = Environment.GetEnvironmentVariable("JwtSettings__Audience");
     }
     
-    // Check if JWT secret is empty
     if (string.IsNullOrEmpty(jwtSettings.SecretKey))
     {
-        Console.WriteLine("ERROR: JWT SecretKey is empty!");
         throw new InvalidOperationException("JWT SecretKey is required but not provided.");
     }
     
     builder.Services.AddSingleton(jwtSettings);
 
-    Console.WriteLine("Configuring Redis...");
-    // Configure Redis
     var redisEnabled = builder.Configuration.GetValue<bool>("Redis:EnableCaching", true);
     var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis") 
                               ?? Environment.GetEnvironmentVariable("Redis__ConnectionString")
                               ?? builder.Configuration.GetConnectionString("Redis") 
                               ?? builder.Configuration["Redis:ConnectionString"];
-    
-    Console.WriteLine($"Redis enabled: {redisEnabled}");
-    Console.WriteLine($"Redis connection string: {redisConnectionString}");
     
     if (redisEnabled && !string.IsNullOrEmpty(redisConnectionString))
     {
@@ -115,7 +90,6 @@ try
                 
                 var multiplexer = ConnectionMultiplexer.Connect(configuration);
                 
-                // Test the connection
                 var database = multiplexer.GetDatabase();
                 database.StringSet("test_connection", "OK", TimeSpan.FromSeconds(10));
                 var testResult = database.StringGet("test_connection");
@@ -134,23 +108,17 @@ try
             });
             
             builder.Services.AddScoped<IRedisCacheService, RedisCacheService>();
-            Console.WriteLine($"Redis configured successfully with connection string: {redisConnectionString}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Redis configuration failed: {ex.Message}");
-            // Fallback to no-op cache service if Redis is not available
             builder.Services.AddScoped<IRedisCacheService, NoOpCacheService>();
         }
     }
     else
     {
-        Console.WriteLine("Warning: Redis is disabled or no connection string found, using no-op cache service");
         builder.Services.AddScoped<IRedisCacheService, NoOpCacheService>();
     }
 
-    Console.WriteLine("Configuring JWT Authentication...");
-    // Configure JWT Authentication
     builder.Services.AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -170,7 +138,6 @@ try
             ClockSkew = TimeSpan.Zero
         };
 
-        // Configure JWT for SignalR
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -187,7 +154,6 @@ try
         };
     });
 
-    // Configure Authorization
     builder.Services.AddAuthorization(options =>
     {
         options.AddPolicy("CustomerOnly", policy => 
@@ -203,7 +169,6 @@ try
             policy.RequireRole("Customer", "Admin"));
     });
 
-    // Register services
     builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
 
@@ -223,7 +188,6 @@ try
             }
         });
 
-        // Add JWT Authentication to Swagger
         c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
         {
             Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\nExample: \"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\"",
@@ -249,7 +213,6 @@ try
             }
         });
 
-        // Include XML comments
         var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
         var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
         try
@@ -258,11 +221,9 @@ try
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Could not include XML comments: {ex.Message}");
         }
     });
 
-    Console.WriteLine("Configuring Database...");
     builder.Services.AddDbContext<OrderDbContext>(options =>
         options.UseSqlServer(connString, sqlOptions =>
         {
@@ -273,108 +234,88 @@ try
             sqlOptions.CommandTimeout(30);
         }));
 
-    Console.WriteLine("Configuring Message Broker...");
+    var messageBrokerProvider = builder.Configuration["MessageBroker:Provider"] 
+                              ?? Environment.GetEnvironmentVariable("MessageBroker__Provider") 
+                              ?? "RabbitMQ";
 
-// Determine which message broker to use
-var messageBrokerProvider = builder.Configuration["MessageBroker:Provider"] 
-                          ?? Environment.GetEnvironmentVariable("MessageBroker__Provider") 
-                          ?? "RabbitMQ"; // Default to RabbitMQ for local development
-
-Console.WriteLine($"Using message broker: {messageBrokerProvider}");
-
-try
-{
-    builder.Services.AddMassTransit(x =>
+    try
     {
-        x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
-        
-        if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
+        builder.Services.AddMassTransit(x =>
         {
-            // Azure Service Bus configuration
-            x.UsingAzureServiceBus((context, cfg) =>
+            x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
+            
+            if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
             {
-                var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString") 
-                                     ?? builder.Configuration.GetConnectionString("AzureServiceBus")
-                                     ?? builder.Configuration["AzureServiceBus:ConnectionString"];
-                
-                if (string.IsNullOrEmpty(connectionString))
+                x.UsingAzureServiceBus((context, cfg) =>
                 {
-                    throw new InvalidOperationException("Azure Service Bus connection string is required but not provided.");
-                }
-                
-                Console.WriteLine("Configuring Azure Service Bus...");
-                cfg.Host(connectionString);
-                
-                // Configure topic for publishing events
-                cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
+                    var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString") 
+                                         ?? builder.Configuration.GetConnectionString("AzureServiceBus")
+                                         ?? builder.Configuration["AzureServiceBus:ConnectionString"];
+                    
+                    if (string.IsNullOrEmpty(connectionString))
+                    {
+                        throw new InvalidOperationException("Azure Service Bus connection string is required but not provided.");
+                    }
+                    
+                    cfg.Host(connectionString);
+                    
+                    cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
                 cfg.SubscriptionEndpoint<OrderPlacedEvent>("order-service-subscription", e =>
-                {
-                    e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
+                    {
+                        e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
+                    });
                 });
-            });
-        }
-        else
-        {
-            // RabbitMQ configuration (default for local development)
-            x.UsingRabbitMq((context, cfg) =>
+            }
+            else
             {
-                var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] 
-                                 ?? Environment.GetEnvironmentVariable("RabbitMQ__Host") 
-                                 ?? "rabbitmq";
-                var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] 
-                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Username") 
-                                     ?? "guest";
-                var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] 
-                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Password") 
-                                     ?? "guest";
+                x.UsingRabbitMq((context, cfg) =>
+                {
+                    var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] 
+                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Host") 
+                                     ?? "rabbitmq";
+                    var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] 
+                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Username") 
+                                         ?? "guest";
+                    var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] 
+                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Password") 
+                                         ?? "guest";
 
-                Console.WriteLine($"Configuring RabbitMQ - Host: {rabbitMqHost}, Username: {rabbitMqUsername}");
-                
-                cfg.Host(rabbitMqHost, "/", h =>
-                {
-                    h.Username(rabbitMqUsername);
-                    h.Password(rabbitMqPassword);
+                    cfg.Host(rabbitMqHost, "/", h =>
+                    {
+                        h.Username(rabbitMqUsername);
+                        h.Password(rabbitMqPassword);
+                    });
+                    
+                    cfg.ReceiveEndpoint("order-placed-queue", e =>
+                    {
+                        e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
+                    });
                 });
-                
-                cfg.ReceiveEndpoint("order-placed-queue", e =>
-                {
-                    e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
-                });
-            });
-        }
-    });
-    
-    Console.WriteLine($"MassTransit configured successfully with {messageBrokerProvider}");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"Error configuring MassTransit with {messageBrokerProvider}: {ex.Message}");
-    throw;
-}
+            }
+        });
+    }
+    catch (Exception ex)
+    {
+        throw;
+    }
 
     builder.Services.AddHttpClient();
     
-    // Configure HttpClients for microservices communication
     builder.Services.AddHttpClient("UserService", client =>
     {
         var userServiceBaseUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl") 
                                ?? builder.Configuration["UserService:BaseUrl"] 
-                               ?? "http://localhost:8080"; // Default for local development
+                               ?? "http://localhost:8080";
         
         client.BaseAddress = new Uri(userServiceBaseUrl);
         client.Timeout = TimeSpan.FromSeconds(30);
         
-        // Add default headers if needed
         client.DefaultRequestHeaders.Add("User-Agent", "OrderService/1.0");
     });
-
-    Console.WriteLine($"UserService BaseUrl configured: {builder.Configuration["UserService:BaseUrl"]}");
     
     builder.Services.AddControllers();
     builder.Services.AddSignalR();
 
-    Console.WriteLine("Configuring OpenTelemetry...");
-    // Configure OpenTelemetry
     builder.Services.AddOpenTelemetry()
         .WithTracing(tracing =>
         {
@@ -393,12 +334,8 @@ catch (Exception ex)
                 .AddPrometheusExporter();
         });
 
-    Console.WriteLine("Building application...");
     var app = builder.Build();
 
-    Console.WriteLine("Application built successfully!");
-
-    // Only attempt database migration if not in development environment or if explicitly requested
     var skipMigration = Environment.GetEnvironmentVariable("SKIP_DB_MIGRATION")?.ToLower() == "true";
     var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
     
@@ -406,11 +343,8 @@ catch (Exception ex)
     {
         try
         {
-            Console.WriteLine("Starting database migration...");
             using var scope = app.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
-            
-            Console.WriteLine("Testing database connection...");
             
             var maxRetries = 5;
             var delay = TimeSpan.FromSeconds(5);
@@ -419,34 +353,18 @@ catch (Exception ex)
             {
                 try
                 {
-                    Console.WriteLine($"Database connection attempt {attempt}/{maxRetries}...");
-                    
                     if (await db.Database.CanConnectAsync())
                     {
-                        Console.WriteLine("Database connection successful!");
-                        
-                        // Check for pending migrations
                         var pendingMigrations = await db.Database.GetPendingMigrationsAsync();
-                        Console.WriteLine($"Pending migrations count: {pendingMigrations.Count()}");
                         
-                        foreach (var migration in pendingMigrations)
-                        {
-                            Console.WriteLine($"Pending migration: {migration}");
-                        }
-                        
-                        Console.WriteLine("Applying migrations...");
                         await db.Database.MigrateAsync();
-                        Console.WriteLine("Database migrations completed successfully!");
                         
-                        // Verify the migrations were applied
                         var appliedMigrations = await db.Database.GetAppliedMigrationsAsync();
-                        Console.WriteLine($"Total applied migrations: {appliedMigrations.Count()}");
                         
                         break;
                     }
                     else
                     {
-                        Console.WriteLine($"Cannot connect to database on attempt {attempt}");
                         if (attempt == maxRetries)
                         {
                             throw new InvalidOperationException($"Database connection failed after {maxRetries} attempts");
@@ -455,35 +373,19 @@ catch (Exception ex)
                 }
                 catch (Exception ex) when (attempt < maxRetries)
                 {
-                    Console.WriteLine($"Database connection attempt {attempt} failed: {ex.Message}");
-                    Console.WriteLine($"Retrying in {delay.TotalSeconds} seconds...");
                     await Task.Delay(delay);
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Database migration failed: {ex.Message}");
-            Console.WriteLine($"Inner exception: {ex.InnerException?.Message}");
-            Console.WriteLine($"Stack trace: {ex.StackTrace}");
-            
-            if (environment?.ToLower() == "production")
-            {
-                Console.WriteLine("WARNING: Running without database in production mode!");
-            }
-            else
+            if (environment?.ToLower() != "production")
             {
                 throw;
             }
         }
     }
-    else
-    {
-        Console.WriteLine("Database migration skipped due to SKIP_DB_MIGRATION=true");
-    }
 
-    Console.WriteLine("Configuring HTTP request pipeline...");
-    // Configure the HTTP request pipeline.
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
@@ -493,7 +395,6 @@ catch (Exception ex)
         c.DisplayRequestDuration();
     });
 
-    // Add Authentication & Authorization middleware
     app.UseAuthentication();
     app.UseAuthorization();
 
@@ -502,16 +403,12 @@ catch (Exception ex)
     app.MapGet("/", () => "OrderService is running 🚀");
     app.MapGet("/health", () => Results.Ok("Healthy"));
 
-    // Expose Prometheus metrics endpoint
     app.UseOpenTelemetryPrometheusScrapingEndpoint();
 
-    Console.WriteLine("Starting OrderService application...");
     app.Run();
 }
 catch (Exception ex)
 {
-    Console.WriteLine($"FATAL ERROR in OrderService: {ex.Message}");
-    Console.WriteLine($"Stack trace: {ex.StackTrace}");
     throw;
 }
 
