@@ -12,6 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using OrderService.Configuration;
 using OrderService.Services;
+using StackExchange.Redis;
 
 // Early debugging - this should appear in Azure logs immediately
 Console.WriteLine("=== OrderService Container Started ===");
@@ -52,7 +53,7 @@ try
     Console.WriteLine("Configuring Kestrel...");
     builder.WebHost.ConfigureKestrel(serverOptions =>
     {
-        serverOptions.ListenAnyIP(8080);
+        serverOptions.ListenAnyIP(8081); // Change from 8080 to 8081
     });
 
     builder.Services.AddEndpointsApiExplorer();
@@ -84,6 +85,68 @@ try
     }
     
     builder.Services.AddSingleton(jwtSettings);
+
+    Console.WriteLine("Configuring Redis...");
+    // Configure Redis
+    var redisEnabled = builder.Configuration.GetValue<bool>("Redis:EnableCaching", true);
+    var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis") 
+                              ?? Environment.GetEnvironmentVariable("Redis__ConnectionString")
+                              ?? builder.Configuration.GetConnectionString("Redis") 
+                              ?? builder.Configuration["Redis:ConnectionString"];
+    
+    Console.WriteLine($"Redis enabled: {redisEnabled}");
+    Console.WriteLine($"Redis connection string: {redisConnectionString}");
+    
+    if (redisEnabled && !string.IsNullOrEmpty(redisConnectionString))
+    {
+        try
+        {
+            builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
+            {
+                var logger = provider.GetRequiredService<ILogger<Program>>();
+                logger.LogInformation("Attempting to connect to Redis at: {ConnectionString}", redisConnectionString);
+                
+                var configuration = ConfigurationOptions.Parse(redisConnectionString);
+                configuration.AbortOnConnectFail = false;
+                configuration.ConnectRetry = 3;
+                configuration.ConnectTimeout = 5000;
+                configuration.SyncTimeout = 5000;
+                
+                var multiplexer = ConnectionMultiplexer.Connect(configuration);
+                
+                // Test the connection
+                var database = multiplexer.GetDatabase();
+                database.StringSet("test_connection", "OK", TimeSpan.FromSeconds(10));
+                var testResult = database.StringGet("test_connection");
+                
+                if (testResult == "OK")
+                {
+                    logger.LogInformation("Redis connection successful!");
+                    database.KeyDelete("test_connection");
+                }
+                else
+                {
+                    logger.LogWarning("Redis connection test failed");
+                }
+                
+                return multiplexer;
+            });
+            
+            builder.Services.AddScoped<IRedisCacheService, RedisCacheService>();
+            Console.WriteLine($"Redis configured successfully with connection string: {redisConnectionString}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Redis configuration failed: {ex.Message}");
+            // Fallback to no-op cache service if Redis is not available
+            builder.Services.AddScoped<IRedisCacheService, NoOpCacheService>();
+        }
+    }
+    else
+    {
+        Console.WriteLine("Warning: Redis is disabled or no connection string found, using no-op cache service");
+        builder.Services.AddScoped<IRedisCacheService, NoOpCacheService>();
+    }
 
     Console.WriteLine("Configuring JWT Authentication...");
     // Configure JWT Authentication
@@ -243,6 +306,23 @@ try
     }
 
     builder.Services.AddHttpClient();
+    
+    // Configure HttpClients for microservices communication
+    builder.Services.AddHttpClient("UserService", client =>
+    {
+        var userServiceBaseUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl") 
+                               ?? builder.Configuration["UserService:BaseUrl"] 
+                               ?? "http://localhost:8080"; // Default for local development
+        
+        client.BaseAddress = new Uri(userServiceBaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(30);
+        
+        // Add default headers if needed
+        client.DefaultRequestHeaders.Add("User-Agent", "OrderService/1.0");
+    });
+
+    Console.WriteLine($"UserService BaseUrl configured: {builder.Configuration["UserService:BaseUrl"]}");
+    
     builder.Services.AddControllers();
     builder.Services.AddSignalR();
 

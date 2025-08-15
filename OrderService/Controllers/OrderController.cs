@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
+using OrderService.Services;
 
 namespace OrderService.Controllers;
 
@@ -25,17 +26,23 @@ public class OrderController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPublishEndpoint _publishEndpoint;
     private readonly ILogger<OrderController> _logger;
+    private readonly IRedisCacheService _cacheService;
+    private readonly IConfiguration _configuration;
 
     public OrderController(
         OrderDbContext context, 
         IHttpClientFactory httpClientFactory, 
         IPublishEndpoint publishEndpoint,
-        ILogger<OrderController> logger)
+        ILogger<OrderController> logger,
+        IRedisCacheService cacheService,
+        IConfiguration configuration)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _publishEndpoint = publishEndpoint;
         _logger = logger;
+        _cacheService = cacheService;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -79,13 +86,14 @@ public class OrderController : ControllerBase
 
         try
         {
-            // Validate user by calling User Service (optional since user is already authenticated)
+            // Use named HttpClient - this will automatically use the configured BaseUrl
             var httpClient = _httpClientFactory.CreateClient("UserService");
-            var userResponse = await httpClient.GetAsync($"/users/{orderDto.UserId}");
+            var userResponse = await httpClient.GetAsync($"/user/{orderDto.UserId}"); // Note: relative URL
 
             if (!userResponse.IsSuccessStatusCode)
             {
-                _logger.LogWarning("User validation failed for UserId: {UserId}. StatusCode: {StatusCode}", orderDto.UserId, userResponse.StatusCode);
+                _logger.LogWarning("User validation failed for UserId: {UserId}. StatusCode: {StatusCode}", 
+                    orderDto.UserId, userResponse.StatusCode);
                 return BadRequest("User does not exist or could not be validated.");
             }
 
@@ -102,6 +110,15 @@ public class OrderController : ControllerBase
 
             _context.Orders.Add(order);
             await _context.SaveChangesAsync();
+
+            // Cache the new order
+            await _cacheService.SetAsync(
+                CacheKeys.GetOrderKey(order.Id), 
+                order, 
+                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
+
+            // Invalidate user-related caches
+            await InvalidateUserCaches(order.UserId);
 
             // Publish event
             var orderPlacedEvent = new OrderPlacedEvent
@@ -120,8 +137,7 @@ public class OrderController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error placing order for authenticated user {Username}, UserId: {UserId}", 
-                authenticatedUsername, orderDto.UserId);
+            _logger.LogError(ex, "Error placing order for UserId: {UserId}", orderDto.UserId);
             return StatusCode(500, "An error occurred while placing the order.");
         }
     }
@@ -160,7 +176,29 @@ public class OrderController : ControllerBase
             _logger.LogInformation("User {Username} (ID: {UserId}, Role: {Role}) tracking order with OrderId: {OrderId}", 
                 authenticatedUsername, authenticatedUserId, userRole, id);
 
-            var order = await _context.Orders.FindAsync(id);
+            // Try to get order from cache first
+            var cachedOrder = await _cacheService.GetAsync<Order>(CacheKeys.GetOrderKey(id));
+            Order? order;
+
+            if (cachedOrder != null)
+            {
+                _logger.LogDebug("Order found in cache. OrderId: {OrderId}", id);
+                order = cachedOrder;
+            }
+            else
+            {
+                _logger.LogDebug("Order not in cache, fetching from database. OrderId: {OrderId}", id);
+                order = await _context.Orders.FindAsync(id);
+                
+                if (order != null)
+                {
+                    // Cache the order for future requests
+                    await _cacheService.SetAsync(
+                        CacheKeys.GetOrderKey(id), 
+                        order, 
+                        TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
+                }
+            }
             
             if (order == null)
             {
@@ -259,6 +297,18 @@ public class OrderController : ControllerBase
 
             await _context.SaveChangesAsync();
 
+            // Update cache with new order status
+            await _cacheService.SetAsync(
+                CacheKeys.GetOrderKey(order.Id), 
+                order, 
+                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
+
+            // Invalidate timeline cache
+            await _cacheService.RemoveAsync(CacheKeys.GetOrderTimelineKey(order.Id));
+
+            // Invalidate user-related caches
+            await InvalidateUserCaches(order.UserId);
+
             // Broadcast status update via SignalR
             await hubContext.Clients.Group($"order-{order.Id}")
                 .SendAsync("OrderStatusUpdated", new
@@ -346,6 +396,15 @@ public class OrderController : ControllerBase
             });
             await _context.SaveChangesAsync();
 
+            // Update cache with new location and ETA
+            await _cacheService.SetAsync(
+                CacheKeys.GetOrderKey(order.Id), 
+                order, 
+                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
+
+            // Invalidate timeline cache
+            await _cacheService.RemoveAsync(CacheKeys.GetOrderTimelineKey(order.Id));
+
             // Broadcast location and ETA update via SignalR
             await hubContext.Clients.Group($"order-{order.Id}")
                 .SendAsync("DeliveryLocationUpdated", new
@@ -396,18 +455,47 @@ public class OrderController : ControllerBase
 
         try
         {
+            // Try to get timeline from cache first
+            var cacheKey = CacheKeys.GetOrderTimelineKey(orderId);
+            var cachedTimeline = await _cacheService.GetAsync<List<OrderHistory>>(cacheKey);
+
+            if (cachedTimeline != null)
+            {
+                _logger.LogDebug("Order timeline found in cache. OrderId: {OrderId}", orderId);
+                
+                // Still need to check authorization - get order from cache or DB
+                var orderCacheKey = CacheKeys.GetOrderKey(orderId);
+                var cachedOrder = await _cacheService.GetAsync<Order>(orderCacheKey);
+                Order? order = cachedOrder ?? await _context.Orders.FindAsync(orderId);
+
+                if (order == null)
+                {
+                    return NotFound($"Order with ID {orderId} not found.");
+                }
+
+                // Security check
+                if (userRole != "Admin" && order.UserId != authenticatedUserId)
+                {
+                    _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to view timeline for order {OrderId} belonging to user {OrderUserId}", 
+                        authenticatedUsername, authenticatedUserId, orderId, order.UserId);
+                    return Forbid("You can only view timeline for your own orders.");
+                }
+
+                return Ok(cachedTimeline);
+            }
+
             // First check if order exists and user has permission
-            var order = await _context.Orders.FindAsync(orderId);
-            if (order == null)
+            var orderFromDb = await _context.Orders.FindAsync(orderId);
+            if (orderFromDb == null)
             {
                 return NotFound($"Order with ID {orderId} not found.");
             }
 
             // Security check: Users can only view timeline for their own orders (unless they're admin)
-            if (userRole != "Admin" && order.UserId != authenticatedUserId)
+            if (userRole != "Admin" && orderFromDb.UserId != authenticatedUserId)
             {
                 _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to view timeline for order {OrderId} belonging to user {OrderUserId}", 
-                    authenticatedUsername, authenticatedUserId, orderId, order.UserId);
+                    authenticatedUsername, authenticatedUserId, orderId, orderFromDb.UserId);
                 return Forbid("You can only view timeline for your own orders.");
             }
 
@@ -415,6 +503,12 @@ public class OrderController : ControllerBase
                 .Where(h => h.OrderId == orderId)
                 .OrderBy(h => h.Timestamp)
                 .ToListAsync();
+
+            // Cache the timeline
+            await _cacheService.SetAsync(
+                cacheKey, 
+                history, 
+                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
 
             _logger.LogInformation("Order timeline fetched successfully by {Username}. OrderId: {OrderId}, HistoryCount: {Count}", 
                 authenticatedUsername, orderId, history.Count);
@@ -462,6 +556,16 @@ public class OrderController : ControllerBase
 
         try
         {
+            // Try to get recommendations from cache first
+            var cacheKey = CacheKeys.GetRecommendationsKey(userId);
+            var cachedRecommendations = await _cacheService.GetAsync<List<RecommendationDto>>(cacheKey);
+
+            if (cachedRecommendations != null)
+            {
+                _logger.LogDebug("Recommendations found in cache for UserId: {UserId}", userId);
+                return Ok(cachedRecommendations);
+            }
+
             var recommendations = await _context.Orders
                 .Where(o => o.UserId == userId)
                 .GroupBy(o => o.Item)
@@ -474,6 +578,12 @@ public class OrderController : ControllerBase
                 .OrderByDescending(x => x.OrderCount)
                 .Take(5)
                 .ToListAsync();
+
+            // Cache the recommendations for longer period since they don't change frequently
+            await _cacheService.SetAsync(
+                cacheKey, 
+                recommendations, 
+                TimeSpan.FromHours(2)); // Cache recommendations for 2 hours
 
             _logger.LogInformation("Recommendations fetched successfully by {Username}. UserId: {UserId}, RecommendationCount: {Count}", 
                 authenticatedUsername, userId, recommendations.Count);
@@ -495,6 +605,35 @@ public class OrderController : ControllerBase
     {
         var userIdClaim = User.FindFirst("userId") ?? User.FindFirst(ClaimTypes.NameIdentifier);
         return int.Parse(userIdClaim?.Value ?? "0");
+    }
+
+    /// <summary>
+    /// Helper method to get cache expiration minutes from configuration
+    /// </summary>
+    private int GetCacheExpirationMinutes()
+    {
+        return _configuration.GetValue<int>("Redis:DefaultExpirationMinutes", 30);
+    }
+
+    /// <summary>
+    /// Helper method to invalidate user-related caches
+    /// </summary>
+    private async Task InvalidateUserCaches(int userId)
+    {
+        try
+        {
+            // Remove recommendations cache
+            await _cacheService.RemoveAsync(CacheKeys.GetRecommendationsKey(userId));
+            
+            // Remove user orders pattern (if you have any)
+            await _cacheService.RemovePatternAsync(CacheKeys.GetUserOrdersPattern(userId));
+            
+            _logger.LogDebug("Invalidated caches for UserId: {UserId}", userId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to invalidate caches for UserId: {UserId}", userId);
+        }
     }
 
     private int CalculateEta(double fromLat, double fromLng, double toLat, double toLng, double avgSpeedKmh = 30)

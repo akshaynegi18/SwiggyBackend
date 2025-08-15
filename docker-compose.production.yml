@@ -2,17 +2,20 @@ services:
   order-api:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_URLS=http://+:8081
       - SKIP_DB_MIGRATION=true
+      - Redis__EnableCaching=true
+      - UserService__BaseUrl=http://user-api:8080  # Add this line
       # These will be set via Azure environment variables:
       # - ConnectionStrings__DefaultConnection
+      # - ConnectionStrings__Redis
       # - RabbitMQ__Host
       # - JwtSettings__SecretKey
     
   user-api:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=http://+:8081
+      - ASPNETCORE_URLS=http://+:8080  # Corrected to 8080
       - SKIP_DB_MIGRATION=true
       # - ConnectionStrings__DefaultConnection
       
@@ -25,3 +28,4 @@ services:
 # Remove local services for cloud deployment
   sqlserver: !reset null
   rabbitmq: !reset null
+  redis: !reset null

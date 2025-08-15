@@ -7,16 +7,38 @@ namespace UserService
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine("=== UserService Container Started ==="); // Fixed from OrderService
+            Console.WriteLine("=== UserService Container Started ===");
             Console.WriteLine($"Current Time: {DateTime.UtcNow}");
             Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}");
             
             var builder = WebApplication.CreateBuilder(args);
 
+            // Configure Kestrel to listen on port 8080
+            Console.WriteLine("Configuring Kestrel...");
+            builder.WebHost.ConfigureKestrel(serverOptions =>
+            {
+                serverOptions.ListenAnyIP(8080);
+            });
+
             // Add services to the container.
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            
+            // Fix: Configure Swagger with proper version specification
+            builder.Services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+                {
+                    Title = "User Service API",
+                    Version = "v1",
+                    Description = "A comprehensive API for managing users in the food delivery system",
+                    Contact = new Microsoft.OpenApi.Models.OpenApiContact
+                    {
+                        Name = "Development Team",
+                        Email = "dev@fooddelivery.com"
+                    }
+                });
+            });
 
             // Fix: Support environment variable override
             var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection") 
@@ -69,10 +91,13 @@ namespace UserService
 
             // Configure the HTTP request pipeline.
             app.UseSwagger();
-            app.UseSwaggerUI();
-
-            // Fix: Remove HTTPS redirection for container environments
-            // app.UseHttpsRedirection(); // Comment out for Docker
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "User Service API v1");
+                c.DocumentTitle = "User Service API Documentation";
+                c.DefaultModelsExpandDepth(-1);
+                c.DisplayRequestDuration();
+            });
 
             app.UseAuthorization();
             app.MapControllers();
@@ -81,7 +106,7 @@ namespace UserService
             app.MapGet("/health", () => Results.Ok("Healthy"));
 
             var logger = app.Services.GetRequiredService<ILogger<Program>>();
-            logger.LogInformation("UserService starting in {Environment} environment on port 8081", app.Environment.EnvironmentName);
+            logger.LogInformation("UserService starting in {Environment} environment on port 8080", app.Environment.EnvironmentName);
 
             app.Run();
         }

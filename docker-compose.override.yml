@@ -2,13 +2,17 @@ services:
   order-api:
     depends_on:
       - sqlserver
+      - redis
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_URLS=http://+:8081
       - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=OrderDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True
+      - ConnectionStrings__Redis=redis:6379
       - RabbitMQ__Host=rabbitmq
       - RabbitMQ__Username=guest
       - RabbitMQ__Password=guest
+      - Redis__EnableCaching=true
+      - UserService__BaseUrl=http://user-api:8080  # Add this line
     volumes:
       - ./OrderService/logs:/app/logs
     
@@ -17,7 +21,7 @@ services:
       - sqlserver
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:8081
+      - ASPNETCORE_URLS=http://+:8080  # Corrected to 8080
       - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=UserDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True
     volumes:
       - ./UserService/logs:/app/logs
@@ -52,6 +56,16 @@ services:
     volumes:
       - rabbitmqdata:/var/lib/rabbitmq
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
 volumes:
   sqlvolume:
   rabbitmqdata:
+  redis_data:

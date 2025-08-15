@@ -4,14 +4,14 @@ services:
       context: ./OrderService
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "8081:8081"  # Change from 8080:8080 to 8081:8081
 
   user-api:
     build:
       context: ./UserService
       dockerfile: Dockerfile
     ports:
-      - "8081:8081"
+      - "8080:8080"  # Change from 8081:8081 to 8080:8080
 
   notification-api:
     build:

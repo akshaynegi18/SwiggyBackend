@@ -8,7 +8,7 @@ class Program
     {
         var orderId = 1; // Set the order ID you want to track
         var connection = new HubConnectionBuilder()
-            .WithUrl("http://localhost:8080/order-tracking-hub")
+            .WithUrl("http://localhost:8081/order-tracking-hub") // Change from 8080 to 8081
             .WithAutomaticReconnect()
             .Build();
 
