@@ -13,6 +13,7 @@ using System.Text;
 using OrderService.Configuration;
 using OrderService.Services;
 using StackExchange.Redis;
+using OrderService.Events;
 
 // Early debugging - this should appear in Azure logs immediately
 Console.WriteLine("=== OrderService Container Started ===");
@@ -272,38 +273,84 @@ try
             sqlOptions.CommandTimeout(30);
         }));
 
-    Console.WriteLine("Configuring RabbitMQ...");
-    var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] ?? Environment.GetEnvironmentVariable("RabbitMQ__Host") ?? "rabbitmq";
-    var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] ?? Environment.GetEnvironmentVariable("RabbitMQ__Username") ?? "guest";
-    var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] ?? Environment.GetEnvironmentVariable("RabbitMQ__Password") ?? "guest";
+    Console.WriteLine("Configuring Message Broker...");
 
-    Console.WriteLine($"RabbitMQ Config - Host: {rabbitMqHost}, Username: {rabbitMqUsername}");
+// Determine which message broker to use
+var messageBrokerProvider = builder.Configuration["MessageBroker:Provider"] 
+                          ?? Environment.GetEnvironmentVariable("MessageBroker__Provider") 
+                          ?? "RabbitMQ"; // Default to RabbitMQ for local development
 
-    try
+Console.WriteLine($"Using message broker: {messageBrokerProvider}");
+
+try
+{
+    builder.Services.AddMassTransit(x =>
     {
-        builder.Services.AddMassTransit(x =>
+        x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
+        
+        if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
         {
-            x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
+            // Azure Service Bus configuration
+            x.UsingAzureServiceBus((context, cfg) =>
+            {
+                var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString") 
+                                     ?? builder.Configuration.GetConnectionString("AzureServiceBus")
+                                     ?? builder.Configuration["AzureServiceBus:ConnectionString"];
+                
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    throw new InvalidOperationException("Azure Service Bus connection string is required but not provided.");
+                }
+                
+                Console.WriteLine("Configuring Azure Service Bus...");
+                cfg.Host(connectionString);
+                
+                // Configure topic for publishing events
+                cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
+                cfg.SubscriptionEndpoint<OrderPlacedEvent>("order-service-subscription", e =>
+                {
+                    e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
+                });
+            });
+        }
+        else
+        {
+            // RabbitMQ configuration (default for local development)
             x.UsingRabbitMq((context, cfg) =>
             {
+                var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] 
+                                 ?? Environment.GetEnvironmentVariable("RabbitMQ__Host") 
+                                 ?? "rabbitmq";
+                var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] 
+                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Username") 
+                                     ?? "guest";
+                var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] 
+                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Password") 
+                                     ?? "guest";
+
+                Console.WriteLine($"Configuring RabbitMQ - Host: {rabbitMqHost}, Username: {rabbitMqUsername}");
+                
                 cfg.Host(rabbitMqHost, "/", h =>
                 {
                     h.Username(rabbitMqUsername);
                     h.Password(rabbitMqPassword);
                 });
+                
                 cfg.ReceiveEndpoint("order-placed-queue", e =>
                 {
                     e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
                 });
             });
-        });
-        Console.WriteLine("MassTransit configured successfully");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Error configuring MassTransit: {ex.Message}");
-        throw;
-    }
+        }
+    });
+    
+    Console.WriteLine($"MassTransit configured successfully with {messageBrokerProvider}");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Error configuring MassTransit with {messageBrokerProvider}: {ex.Message}");
+    throw;
+}
 
     builder.Services.AddHttpClient();
     

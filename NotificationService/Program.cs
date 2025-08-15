@@ -1,4 +1,5 @@
 using MassTransit;
+using NotificationService.Events;
 
 namespace NotificationService
 {
@@ -17,29 +18,65 @@ namespace NotificationService
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
 
-            // Fix: Support environment variable configuration for RabbitMQ
-            var rabbitMqHost = Environment.GetEnvironmentVariable("RabbitMQ__Host") ?? "rabbitmq";
-            var rabbitMqUsername = Environment.GetEnvironmentVariable("RabbitMQ__Username") ?? "guest";
-            var rabbitMqPassword = Environment.GetEnvironmentVariable("RabbitMQ__Password") ?? "guest";
+            // Determine which message broker to use
+            var messageBrokerProvider = Environment.GetEnvironmentVariable("MessageBroker__Provider") ?? "RabbitMQ";
 
-            Console.WriteLine($"RabbitMQ Config - Host: {rabbitMqHost}, Username: {rabbitMqUsername}");
+            Console.WriteLine($"Using message broker: {messageBrokerProvider}");
 
-            // MassTransit + RabbitMQ setup
+            // MassTransit setup with conditional broker
             builder.Services.AddMassTransit(x =>
             {
                 x.AddConsumer<OrderPlacedEventConsumer>();
-                x.UsingRabbitMq((context, cfg) =>
+                
+                if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
                 {
-                    cfg.Host(rabbitMqHost, "/", h =>
+                    // Azure Service Bus configuration
+                    x.UsingAzureServiceBus((context, cfg) =>
                     {
-                        h.Username(rabbitMqUsername);
-                        h.Password(rabbitMqPassword);
+                        var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString");
+                        
+                        if (string.IsNullOrEmpty(connectionString))
+                        {
+                            throw new InvalidOperationException("Azure Service Bus connection string is required but not provided.");
+                        }
+                        
+                        Console.WriteLine("Configuring Azure Service Bus...");
+                        cfg.Host(connectionString);
+                        
+                        // Configure topic for the event
+                        // Update the SubscriptionEndpoint configuration to use the correct overload
+                        cfg.SubscriptionEndpoint("notification-service-subscription", "order-events", e =>
+                        {
+                            e.ConfigureConsumer<OrderPlacedEventConsumer>(context);
+                        });
+                        cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
+                        
+                        
                     });
-                    cfg.ReceiveEndpoint("order-placed-notificationservice", e =>
+                }
+                else
+                {
+                    // RabbitMQ configuration (default)
+                    x.UsingRabbitMq((context, cfg) =>
                     {
-                        e.ConfigureConsumer<OrderPlacedEventConsumer>(context);
+                        var rabbitMqHost = Environment.GetEnvironmentVariable("RabbitMQ__Host") ?? "rabbitmq";
+                        var rabbitMqUsername = Environment.GetEnvironmentVariable("RabbitMQ__Username") ?? "guest";
+                        var rabbitMqPassword = Environment.GetEnvironmentVariable("RabbitMQ__Password") ?? "guest";
+
+                        Console.WriteLine($"RabbitMQ Config - Host: {rabbitMqHost}, Username: {rabbitMqUsername}");
+
+                        cfg.Host(rabbitMqHost, "/", h =>
+                        {
+                            h.Username(rabbitMqUsername);
+                            h.Password(rabbitMqPassword);
+                        });
+                        
+                        cfg.ReceiveEndpoint("order-placed-notificationservice", e =>
+                        {
+                            e.ConfigureConsumer<OrderPlacedEventConsumer>(context);
+                        });
                     });
-                });
+                }
             });
 
             var app = builder.Build();
