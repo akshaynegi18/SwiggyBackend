@@ -21,7 +21,7 @@ services:
       - sqlserver
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:8080  # Corrected to 8080
+      - ASPNETCORE_URLS=http://+:8080
       - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=UserDb;User Id=sa;Password=DatabasePassword@123;TrustServerCertificate=True
     volumes:
       - ./UserService/logs:/app/logs
@@ -49,12 +49,8 @@ services:
       - sqlvolume:/var/opt/mssql
 
   rabbitmq:
-    image: rabbitmq:3-management
-    ports:
-      - "15672:15672"
-      - "5672:5672"
     volumes:
-      - rabbitmqdata:/var/lib/rabbitmq
+      - rabbitmq_data:/var/lib/rabbitmq  # Standardized to match main file
 
   redis:
     image: redis:7-alpine
@@ -65,7 +61,29 @@ services:
     command: redis-server --appendonly yes
     restart: unless-stopped
 
+  apigateway:
+    depends_on:  # Added to ensure proper startup order
+      - user-api
+      - order-api
+      - notification-api
+      - rabbitmq
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      # If enabling HTTPS in dev, uncomment and adjust below:
+      # - ASPNETCORE_URLS=http://+:8080;https://+:8081
+      # - ASPNETCORE_HTTP_PORTS=8080
+      # - ASPNETCORE_HTTPS_PORTS=8081
+    # If enabling HTTPS, uncomment ports and volumes below:
+    # ports:
+    #   - "8088:8080"  # Host HTTP (adjust if needed)
+    #   - "8089:8081"  # Host HTTPS (adjust if needed)
+    # volumes:
+    #   - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
+    #   - ${APPDATA}/Microsoft/UserSecrets:/root/.microsoft/usersecrets:ro
+    #   - ${APPDATA}/ASP.NET/Https:/home/app/.aspnet/https:ro
+    #   - ${APPDATA}/ASP.NET/Https:/root/.aspnet/https:ro
+
 volumes:
   sqlvolume:
-  rabbitmqdata:
+  rabbitmq_data:  # Standardized name
   redis_data:

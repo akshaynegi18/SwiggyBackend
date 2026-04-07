@@ -12,8 +12,8 @@ using OrderService.Data;
 namespace OrderService.Migrations
 {
     [DbContext(typeof(OrderDbContext))]
-    [Migration("20250725133159_SeedOrderStatus")]
-    partial class SeedOrderStatus
+    [Migration("20260404125233_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -40,6 +40,21 @@ namespace OrderService.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<double?>("DeliveryLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DeliveryLongitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DestinationLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DestinationLongitude")
+                        .HasColumnType("float");
+
+                    b.Property<int?>("ETA")
+                        .HasColumnType("int");
+
                     b.Property<string>("Item")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -59,7 +74,7 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 1,
-                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6300),
+                            CreatedAt = new DateTime(2024, 1, 1, 12, 0, 0, 0, DateTimeKind.Unspecified),
                             CustomerName = "Akshay",
                             Item = "Paneer Tikka",
                             Status = "Placed",
@@ -68,7 +83,7 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 2,
-                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6768),
+                            CreatedAt = new DateTime(2024, 1, 1, 12, 5, 0, 0, DateTimeKind.Unspecified),
                             CustomerName = "Ravi",
                             Item = "Egg Roll",
                             Status = "Placed",
@@ -77,12 +92,54 @@ namespace OrderService.Migrations
                         new
                         {
                             Id = 3,
-                            CreatedAt = new DateTime(2025, 7, 25, 13, 31, 58, 315, DateTimeKind.Utc).AddTicks(6770),
+                            CreatedAt = new DateTime(2024, 1, 1, 12, 10, 0, 0, DateTimeKind.Unspecified),
                             CustomerName = "Neha",
                             Item = "Veg Biryani",
                             Status = "Placed",
                             UserId = 1
                         });
+                });
+
+            modelBuilder.Entity("OrderService.Model.OrderHistory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<double?>("DeliveryLatitude")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("DeliveryLongitude")
+                        .HasColumnType("float");
+
+                    b.Property<int>("OrderId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.ToTable("OrderHistories");
+                });
+
+            modelBuilder.Entity("OrderService.Model.OrderHistory", b =>
+                {
+                    b.HasOne("OrderService.Model.Order", "Order")
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Order");
                 });
 #pragma warning restore 612, 618
         }

@@ -19,9 +19,9 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    var connString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection") 
+    var connString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
                     ?? builder.Configuration.GetConnectionString("DefaultConnection");
-    
+
     var jwtSecret = Environment.GetEnvironmentVariable("JwtSettings__SecretKey");
 
     if (string.IsNullOrEmpty(connString))
@@ -46,7 +46,7 @@ try
 
     var jwtSettings = new JwtSettings();
     builder.Configuration.GetSection(JwtSettings.SectionName).Bind(jwtSettings);
-    
+
     if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("JwtSettings__SecretKey")))
     {
         jwtSettings.SecretKey = Environment.GetEnvironmentVariable("JwtSettings__SecretKey");
@@ -59,20 +59,20 @@ try
     {
         jwtSettings.Audience = Environment.GetEnvironmentVariable("JwtSettings__Audience");
     }
-    
+
     if (string.IsNullOrEmpty(jwtSettings.SecretKey))
     {
         throw new InvalidOperationException("JWT SecretKey is required but not provided.");
     }
-    
+
     builder.Services.AddSingleton(jwtSettings);
 
     var redisEnabled = builder.Configuration.GetValue<bool>("Redis:EnableCaching", true);
-    var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis") 
+    var redisConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Redis")
                               ?? Environment.GetEnvironmentVariable("Redis__ConnectionString")
-                              ?? builder.Configuration.GetConnectionString("Redis") 
+                              ?? builder.Configuration.GetConnectionString("Redis")
                               ?? builder.Configuration["Redis:ConnectionString"];
-    
+
     if (redisEnabled && !string.IsNullOrEmpty(redisConnectionString))
     {
         try
@@ -81,19 +81,19 @@ try
             {
                 var logger = provider.GetRequiredService<ILogger<Program>>();
                 logger.LogInformation("Attempting to connect to Redis at: {ConnectionString}", redisConnectionString);
-                
+
                 var configuration = ConfigurationOptions.Parse(redisConnectionString);
                 configuration.AbortOnConnectFail = false;
                 configuration.ConnectRetry = 3;
                 configuration.ConnectTimeout = 5000;
                 configuration.SyncTimeout = 5000;
-                
+
                 var multiplexer = ConnectionMultiplexer.Connect(configuration);
-                
+
                 var database = multiplexer.GetDatabase();
                 database.StringSet("test_connection", "OK", TimeSpan.FromSeconds(10));
                 var testResult = database.StringGet("test_connection");
-                
+
                 if (testResult == "OK")
                 {
                     logger.LogInformation("Redis connection successful!");
@@ -103,10 +103,10 @@ try
                 {
                     logger.LogWarning("Redis connection test failed");
                 }
-                
+
                 return multiplexer;
             });
-            
+
             builder.Services.AddScoped<IRedisCacheService, RedisCacheService>();
         }
         catch (Exception ex)
@@ -144,7 +144,7 @@ try
             {
                 var accessToken = context.Request.Query["access_token"];
                 var path = context.HttpContext.Request.Path;
-                
+
                 if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/order-tracking-hub"))
                 {
                     context.Token = accessToken;
@@ -156,23 +156,22 @@ try
 
     builder.Services.AddAuthorization(options =>
     {
-        options.AddPolicy("CustomerOnly", policy => 
+        options.AddPolicy("CustomerOnly", policy =>
             policy.RequireRole("Customer"));
-        
-        options.AddPolicy("DeliveryPartnerOnly", policy => 
+
+        options.AddPolicy("DeliveryPartnerOnly", policy =>
             policy.RequireRole("DeliveryPartner"));
-        
-        options.AddPolicy("AdminOnly", policy => 
+
+        options.AddPolicy("AdminOnly", policy =>
             policy.RequireRole("Admin"));
-        
-        options.AddPolicy("CustomerOrAdmin", policy => 
+
+        options.AddPolicy("CustomerOrAdmin", policy =>
             policy.RequireRole("Customer", "Admin"));
     });
 
     builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
-
-//builder.Services.AddHostedService<DeliveryPartnerSimulator>();
+    //builder.Services.AddHostedService<DeliveryPartnerSimulator>();
 
     builder.Services.AddSwaggerGen(c =>
     {
@@ -219,7 +218,7 @@ try
         {
             c.IncludeXmlComments(xmlPath);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
         }
     });
@@ -234,8 +233,8 @@ try
             sqlOptions.CommandTimeout(30);
         }));
 
-    var messageBrokerProvider = builder.Configuration["MessageBroker:Provider"] 
-                              ?? Environment.GetEnvironmentVariable("MessageBroker__Provider") 
+    var messageBrokerProvider = builder.Configuration["MessageBroker:Provider"]
+                              ?? Environment.GetEnvironmentVariable("MessageBroker__Provider")
                               ?? "RabbitMQ";
 
     try
@@ -243,24 +242,24 @@ try
         builder.Services.AddMassTransit(x =>
         {
             x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
-            
+
             if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
             {
                 x.UsingAzureServiceBus((context, cfg) =>
                 {
-                    var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString") 
+                    var connectionString = Environment.GetEnvironmentVariable("AzureServiceBus__ConnectionString")
                                          ?? builder.Configuration.GetConnectionString("AzureServiceBus")
                                          ?? builder.Configuration["AzureServiceBus:ConnectionString"];
-                    
+
                     if (string.IsNullOrEmpty(connectionString))
                     {
                         throw new InvalidOperationException("Azure Service Bus connection string is required but not provided.");
                     }
-                    
+
                     cfg.Host(connectionString);
-                    
+
                     cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
-                cfg.SubscriptionEndpoint<OrderPlacedEvent>("order-service-subscription", e =>
+                    cfg.SubscriptionEndpoint<OrderPlacedEvent>("order-service-subscription", e =>
                     {
                         e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
                     });
@@ -270,14 +269,14 @@ try
             {
                 x.UsingRabbitMq((context, cfg) =>
                 {
-                    var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] 
-                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Host") 
+                    var rabbitMqHost = builder.Configuration["RabbitMQ:Host"]
+                                     ?? Environment.GetEnvironmentVariable("RabbitMQ__Host")
                                      ?? "rabbitmq";
-                    var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] 
-                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Username") 
+                    var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"]
+                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Username")
                                          ?? "guest";
-                    var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] 
-                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Password") 
+                    var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"]
+                                         ?? Environment.GetEnvironmentVariable("RabbitMQ__Password")
                                          ?? "guest";
 
                     cfg.Host(rabbitMqHost, "/", h =>
@@ -285,7 +284,7 @@ try
                         h.Username(rabbitMqUsername);
                         h.Password(rabbitMqPassword);
                     });
-                    
+
                     cfg.ReceiveEndpoint("order-placed-queue", e =>
                     {
                         e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
@@ -294,25 +293,25 @@ try
             }
         });
     }
-    catch (Exception ex)
+    catch (Exception)
     {
         throw;
     }
 
     builder.Services.AddHttpClient();
-    
+
     builder.Services.AddHttpClient("UserService", client =>
     {
-        var userServiceBaseUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl") 
-                               ?? builder.Configuration["UserService:BaseUrl"] 
+        var userServiceBaseUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl")
+                               ?? builder.Configuration["UserService:BaseUrl"]
                                ?? "http://localhost:8080";
-        
+
         client.BaseAddress = new Uri(userServiceBaseUrl);
         client.Timeout = TimeSpan.FromSeconds(30);
-        
+
         client.DefaultRequestHeaders.Add("User-Agent", "OrderService/1.0");
     });
-    
+
     builder.Services.AddControllers();
     builder.Services.AddSignalR();
 
@@ -337,51 +336,137 @@ try
     var app = builder.Build();
 
     var skipMigration = Environment.GetEnvironmentVariable("SKIP_DB_MIGRATION")?.ToLower() == "true";
-    var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-    
+
     if (!skipMigration)
     {
-        try
+        using (var scope = app.Services.CreateScope())
         {
-            using var scope = app.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
-            
-            var maxRetries = 5;
-            var delay = TimeSpan.FromSeconds(5);
-            
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+            try
             {
+                logger.LogInformation("Starting database migration check...");
+
+                // Step 1: Check if the Orders table already exists in the database
+                bool tablesAlreadyExist = false;
                 try
                 {
-                    if (await db.Database.CanConnectAsync())
+                    var conn = db.Database.GetDbConnection();
+                    if (conn.State != System.Data.ConnectionState.Open)
+                        await conn.OpenAsync();
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT CASE WHEN OBJECT_ID(N'Orders', N'U') IS NOT NULL THEN 1 ELSE 0 END";
+                    var result = await cmd.ExecuteScalarAsync();
+                    tablesAlreadyExist = result != null && Convert.ToInt32(result) == 1;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Could not check if tables already exist");
+                }
+
+                // Step 2: If tables exist, ALWAYS run idempotent schema repair to add any missing columns.
+                // This runs regardless of migration history state.
+                if (tablesAlreadyExist)
+                {
+                    logger.LogInformation("Orders table exists - running idempotent schema repair...");
+
+                    var schemaRepairStatements = new[]
                     {
-                        var pendingMigrations = await db.Database.GetPendingMigrationsAsync();
-                        
-                        await db.Database.MigrateAsync();
-                        
-                        var appliedMigrations = await db.Database.GetAppliedMigrationsAsync();
-                        
-                        break;
+                        "IF COL_LENGTH('Orders', 'DeliveryLatitude') IS NULL ALTER TABLE [Orders] ADD [DeliveryLatitude] float NULL;",
+                        "IF COL_LENGTH('Orders', 'DeliveryLongitude') IS NULL ALTER TABLE [Orders] ADD [DeliveryLongitude] float NULL;",
+                        "IF COL_LENGTH('Orders', 'ETA') IS NULL ALTER TABLE [Orders] ADD [ETA] int NULL;",
+                        "IF COL_LENGTH('Orders', 'DestinationLatitude') IS NULL ALTER TABLE [Orders] ADD [DestinationLatitude] float NULL;",
+                        "IF COL_LENGTH('Orders', 'DestinationLongitude') IS NULL ALTER TABLE [Orders] ADD [DestinationLongitude] float NULL;",
+                        @"IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'OrderHistories')
+                          CREATE TABLE [OrderHistories] (
+                              [Id] int NOT NULL IDENTITY(1,1),
+                              [OrderId] int NOT NULL,
+                              [Status] nvarchar(max) NOT NULL,
+                              [DeliveryLatitude] float NULL,
+                              [DeliveryLongitude] float NULL,
+                              [Timestamp] datetime2 NOT NULL,
+                              CONSTRAINT [PK_OrderHistories] PRIMARY KEY ([Id]),
+                              CONSTRAINT [FK_OrderHistories_Orders_OrderId] FOREIGN KEY ([OrderId]) REFERENCES [Orders]([Id]) ON DELETE CASCADE
+                          );",
+                        "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_OrderHistories_OrderId') CREATE INDEX [IX_OrderHistories_OrderId] ON [OrderHistories]([OrderId]);",
+                        "IF COL_LENGTH('OrderHistories', 'DeliveryLatitude') IS NULL ALTER TABLE [OrderHistories] ADD [DeliveryLatitude] float NULL;",
+                        "IF COL_LENGTH('OrderHistories', 'DeliveryLongitude') IS NULL ALTER TABLE [OrderHistories] ADD [DeliveryLongitude] float NULL;",
+                    };
+
+                    foreach (var sql in schemaRepairStatements)
+                    {
+                        db.Database.ExecuteSqlRaw(sql);
+                    }
+
+                    logger.LogInformation("Schema repair completed.");
+                }
+
+                // Step 3: Handle EF Core migration history
+                var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+                var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
+
+                logger.LogInformation("Migration status - Applied: {AppliedCount}, Pending: {PendingCount}",
+                    appliedMigrations.Count, pendingMigrations.Count);
+
+                if (pendingMigrations.Any())
+                {
+                    if (tablesAlreadyExist)
+                    {
+                        // Tables exist but migrations aren't recorded - sync the history
+                        logger.LogWarning("Tables exist but {Count} migration(s) not recorded: {Migrations}",
+                            pendingMigrations.Count, string.Join(", ", pendingMigrations));
+
+                        var efVersion = typeof(DbContext).Assembly.GetName().Version!;
+                        var productVersion = $"{efVersion.Major}.{efVersion.Minor}.{efVersion.Build}";
+
+                        db.Database.ExecuteSqlRaw(
+                            @"IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '__EFMigrationsHistory')
+                              CREATE TABLE [__EFMigrationsHistory] (
+                                  [MigrationId] nvarchar(150) NOT NULL,
+                                  [ProductVersion] nvarchar(32) NOT NULL,
+                                  CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
+                              )");
+
+                        foreach (var migration in pendingMigrations)
+                        {
+                            db.Database.ExecuteSqlRaw(
+                                "IF NOT EXISTS (SELECT 1 FROM [__EFMigrationsHistory] WHERE [MigrationId] = {0}) " +
+                                "INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion]) VALUES ({0}, {1})",
+                                migration, productVersion);
+                            logger.LogInformation("Marked migration '{Migration}' as applied (version: {Version})", migration, productVersion);
+                        }
+
+                        logger.LogInformation("Migration history synchronized.");
                     }
                     else
                     {
-                        if (attempt == maxRetries)
-                        {
-                            throw new InvalidOperationException($"Database connection failed after {maxRetries} attempts");
-                        }
+                        // Fresh database - run migrations normally
+                        logger.LogInformation("Applying {Count} pending migration(s): {Migrations}",
+                            pendingMigrations.Count, string.Join(", ", pendingMigrations));
+
+                        db.Database.Migrate();
+                        logger.LogInformation("Database migrations applied successfully.");
                     }
                 }
-                catch (Exception ex) when (attempt < maxRetries)
+                else
                 {
-                    await Task.Delay(delay);
+                    logger.LogInformation("Database is up to date - no pending migrations.");
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            if (environment?.ToLower() != "production")
+            catch (Exception ex)
             {
-                throw;
+                logger.LogError(ex, "Database migration failed: {Error}", ex.Message);
+                var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+                if (environment?.ToLower() != "production")
+                {
+                    throw;
+                }
+                else
+                {
+                    logger.LogWarning("Continuing startup in production mode despite migration error");
+                }
             }
         }
     }
@@ -407,7 +492,7 @@ try
 
     app.Run();
 }
-catch (Exception ex)
+catch (Exception)
 {
     throw;
 }

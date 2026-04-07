@@ -16,7 +16,7 @@ services:
       context: ./OrderService
       dockerfile: Dockerfile
     ports:
-      - "8081:8081"  # Change from 8080:8080 to 8081:8081
+      - "8081:8081"
     environment:
       - MessageBroker__Provider=RabbitMQ
       - RabbitMQ__Host=rabbitmq
@@ -28,7 +28,7 @@ services:
       context: ./UserService
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"  # Change from 8081:8081 to 8080:8080
+      - "8080:8080"
 
   notification-api:
     build:
@@ -42,5 +42,15 @@ services:
     depends_on:
       - rabbitmq
 
+  apigateway:
+    build:
+      context: .
+      dockerfile: ApiGateway/Dockerfile
+    ports:
+      - "8088:8088"
+    environment:
+      - ASPNETCORE_URLS=http://+:8088
+
 volumes:
   rabbitmq_data:
+

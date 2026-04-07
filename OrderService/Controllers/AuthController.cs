@@ -215,8 +215,7 @@ public class AuthController : ControllerBase
     }
 
     private string GetUserServiceUrl()
-    {
-        // Try environment variable first (UserService__BaseUrl)
+    {  
         var userServiceUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl") 
                            ?? _configuration["UserService:BaseUrl"]
                            ?? "http://user-api:8081"; // Fallback for local development

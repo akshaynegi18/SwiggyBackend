@@ -88,7 +88,7 @@ public class UserController : ControllerBase
             Email = request.Email,
             PhoneNumber = request.PhoneNumber,
             PasswordHash = hashedPassword,
-            Role = request.Role ?? "Customer", // Default to Customer
+            Role = request.Role ?? "Customer", 
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };

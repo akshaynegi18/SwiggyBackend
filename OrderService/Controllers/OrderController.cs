@@ -29,6 +29,7 @@ public class OrderController : ControllerBase
     private readonly IRedisCacheService _cacheService;
     private readonly IConfiguration _configuration;
 
+
     public OrderController(
         OrderDbContext context, 
         IHttpClientFactory httpClientFactory, 
@@ -625,7 +626,7 @@ public class OrderController : ControllerBase
             // Remove recommendations cache
             await _cacheService.RemoveAsync(CacheKeys.GetRecommendationsKey(userId));
             
-            // Remove user orders pattern (if you have any)
+            // Remove user orders pattern 
             await _cacheService.RemovePatternAsync(CacheKeys.GetUserOrdersPattern(userId));
             
             _logger.LogDebug("Invalidated caches for UserId: {UserId}", userId);
