@@ -17,6 +17,11 @@ using OrderService.Events;
 using OrderService.Saga;
 using OrderService.Saga.Consumers;
 using MassTransit.EntityFrameworkCoreIntegration;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Http.Resilience;
+using OrderService.Resilience;
+using Polly;
 
 try
 {
@@ -361,7 +366,8 @@ try
 
     builder.Services.AddHttpClient();
 
-    builder.Services.AddHttpClient("UserService", client =>
+    // ── Resilient HttpClient for UserService (Retry + Circuit Breaker + Timeout) ──
+    builder.Services.AddHttpClient<UserServiceClient>(client =>
     {
         var userServiceBaseUrl = Environment.GetEnvironmentVariable("UserService__BaseUrl")
                                ?? builder.Configuration["UserService:BaseUrl"]
@@ -369,8 +375,84 @@ try
 
         client.BaseAddress = new Uri(userServiceBaseUrl);
         client.Timeout = TimeSpan.FromSeconds(30);
-
         client.DefaultRequestHeaders.Add("User-Agent", "OrderService/1.0");
+    })
+    .AddResilienceHandler("user-service", pipeline =>
+    {
+        // 1) Retry — exponential backoff with jitter on transient failures
+        pipeline.AddRetry(new HttpRetryStrategyOptions
+        {
+            MaxRetryAttempts = 3,
+            Delay = TimeSpan.FromMilliseconds(500),
+            BackoffType = DelayBackoffType.Exponential,
+            UseJitter = true,
+            ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                .Handle<HttpRequestException>()
+                .Handle<TaskCanceledException>()
+                .HandleResult(r => r.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                                || r.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        });
+
+        // 2) Circuit Breaker — open after 50 % failure rate over 30 s, stay open 30 s
+        pipeline.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+        {
+            SamplingDuration = TimeSpan.FromSeconds(30),
+            FailureRatio = 0.5,
+            MinimumThroughput = 5,
+            BreakDuration = TimeSpan.FromSeconds(30),
+            ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                .Handle<HttpRequestException>()
+                .Handle<TaskCanceledException>()
+                .HandleResult(r => (int)r.StatusCode >= 500)
+        });
+
+        // 3) Timeout — 10 s per attempt (inner timeout, applies per retry attempt)
+        pipeline.AddTimeout(TimeSpan.FromSeconds(10));
+    });
+
+    // ── Rate Limiting ──
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+        options.OnRejected = async (context, cancellationToken) =>
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+
+            if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            {
+                context.HttpContext.Response.Headers.RetryAfter =
+                    ((int)retryAfter.TotalSeconds).ToString();
+            }
+
+            await context.HttpContext.Response.WriteAsJsonAsync(new
+            {
+                error = "Too many requests",
+                message = "Rate limit exceeded. Please try again later.",
+                retryAfterSeconds = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var ra)
+                    ? (int)ra.TotalSeconds
+                    : (int?)null
+            }, cancellationToken);
+        };
+
+        // Per-user sliding window for order placement — 5 orders / min
+        // (Business rule: gateway handles IP-based infra protection)
+        options.AddPolicy("order-placement", context =>
+        {
+            var userId = context.User.FindFirst("userId")?.Value
+                      ?? context.Connection.RemoteIpAddress?.ToString()
+                      ?? "unknown";
+
+            return RateLimitPartition.GetSlidingWindowLimiter(userId,
+                _ => new SlidingWindowRateLimiterOptions
+                {
+                    PermitLimit = 5,
+                    Window = TimeSpan.FromMinutes(1),
+                    SegmentsPerWindow = 6,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 2
+                });
+        });
     });
 
     builder.Services.AddControllers();
@@ -542,6 +624,7 @@ try
     });
 
     app.UseAuthentication();
+    app.UseRateLimiter();
     app.UseAuthorization();
 
     app.MapControllers();

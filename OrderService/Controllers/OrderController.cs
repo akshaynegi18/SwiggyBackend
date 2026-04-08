@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using OrderService.Services;
 using OrderService.Saga;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace OrderService.Controllers;
 
@@ -56,6 +57,7 @@ public class OrderController : ControllerBase
     /// <response code="500">Internal server error occurred</response>
     [HttpPost("place")]
     [Authorize(Policy = "CustomerOnly")]
+    [EnableRateLimiting("order-placement")]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(typeof(string), 400)]
     [ProducesResponseType(401)]
