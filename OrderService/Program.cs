@@ -14,6 +14,9 @@ using OrderService.Configuration;
 using OrderService.Services;
 using StackExchange.Redis;
 using OrderService.Events;
+using OrderService.Saga;
+using OrderService.Saga.Consumers;
+using MassTransit.EntityFrameworkCoreIntegration;
 
 try
 {
@@ -241,7 +244,24 @@ try
     {
         builder.Services.AddMassTransit(x =>
         {
+            // Existing logging consumer
             x.AddConsumer<OrderService.Consumers.OrderPlacedEventConsumer>();
+
+            // Saga service consumers
+            x.AddConsumer<ProcessPaymentConsumer>();
+            x.AddConsumer<ConfirmRestaurantConsumer>();
+            x.AddConsumer<AssignDeliveryPartnerConsumer>();
+            x.AddConsumer<RefundPaymentConsumer>();
+            x.AddConsumer<OrderFulfillmentStatusConsumer>();
+
+            // Order Fulfillment Saga
+            x.AddSagaStateMachine<OrderFulfillmentSaga, OrderSagaState>()
+                .EntityFrameworkRepository(r =>
+                {
+                    r.ConcurrencyMode = ConcurrencyMode.Pessimistic;
+                    r.LockStatementProvider = new SqlServerLockStatementProvider();
+                    r.ExistingDbContext<OrderDbContext>();
+                });
 
             if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
             {
@@ -258,11 +278,31 @@ try
 
                     cfg.Host(connectionString);
 
+                    cfg.UseServiceBusMessageScheduler();
+
                     cfg.Message<OrderPlacedEvent>(x => x.SetEntityName("order-events"));
+
+                    // Existing logging consumer
                     cfg.SubscriptionEndpoint<OrderPlacedEvent>("order-service-subscription", e =>
                     {
                         e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
                     });
+
+                    // Saga endpoint — subscribes to OrderPlacedEvent + all response events
+                    cfg.ReceiveEndpoint("order-fulfillment-saga", e =>
+                        e.ConfigureSaga<OrderSagaState>(context));
+
+                    // Command endpoints (saga sends commands to these queues)
+                    cfg.ReceiveEndpoint("process-payment", e =>
+                        e.ConfigureConsumer<ProcessPaymentConsumer>(context));
+                    cfg.ReceiveEndpoint("confirm-restaurant", e =>
+                        e.ConfigureConsumer<ConfirmRestaurantConsumer>(context));
+                    cfg.ReceiveEndpoint("assign-delivery-partner", e =>
+                        e.ConfigureConsumer<AssignDeliveryPartnerConsumer>(context));
+                    cfg.ReceiveEndpoint("refund-payment", e =>
+                        e.ConfigureConsumer<RefundPaymentConsumer>(context));
+                    cfg.ReceiveEndpoint("order-fulfillment-status", e =>
+                        e.ConfigureConsumer<OrderFulfillmentStatusConsumer>(context));
                 });
             }
             else
@@ -285,10 +325,31 @@ try
                         h.Password(rabbitMqPassword);
                     });
 
+                    cfg.UseDelayedMessageScheduler();
+
+                    // Existing logging consumer
                     cfg.ReceiveEndpoint("order-placed-queue", e =>
                     {
                         e.ConfigureConsumer<OrderService.Consumers.OrderPlacedEventConsumer>(context);
                     });
+
+                    // Saga endpoint — subscribes to OrderPlacedEvent + all response events
+                    cfg.ReceiveEndpoint("order-fulfillment-saga", e =>
+                    {
+                        e.ConfigureSaga<OrderSagaState>(context);
+                    });
+
+                    // Command endpoints (saga sends commands to these queues)
+                    cfg.ReceiveEndpoint("process-payment", e =>
+                        e.ConfigureConsumer<ProcessPaymentConsumer>(context));
+                    cfg.ReceiveEndpoint("confirm-restaurant", e =>
+                        e.ConfigureConsumer<ConfirmRestaurantConsumer>(context));
+                    cfg.ReceiveEndpoint("assign-delivery-partner", e =>
+                        e.ConfigureConsumer<AssignDeliveryPartnerConsumer>(context));
+                    cfg.ReceiveEndpoint("refund-payment", e =>
+                        e.ConfigureConsumer<RefundPaymentConsumer>(context));
+                    cfg.ReceiveEndpoint("order-fulfillment-status", e =>
+                        e.ConfigureConsumer<OrderFulfillmentStatusConsumer>(context));
                 });
             }
         });

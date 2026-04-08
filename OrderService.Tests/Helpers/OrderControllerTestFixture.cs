@@ -24,15 +24,11 @@ public class OrderControllerTestFixture : IDisposable
 {
     // ── Core dependencies ──
     public OrderDbContext DbContext { get; }
-    public Mock<IHttpClientFactory> HttpClientFactoryMock { get; }
     public Mock<IPublishEndpoint> PublishEndpointMock { get; }
     public Mock<ILogger<OrderController>> LoggerMock { get; }
     public Mock<IRedisCacheService> CacheServiceMock { get; }
     public Mock<IHubContext<OrderTrackingHub>> HubContextMock { get; }
     public IConfiguration Configuration { get; }
-
-    // ── Fake HTTP handler (controls UserService responses) ──
-    public FakeHttpMessageHandler FakeHttpHandler { get; }
 
     public OrderControllerTestFixture()
     {
@@ -43,20 +39,12 @@ public class OrderControllerTestFixture : IDisposable
         DbContext = new OrderDbContext(options);
 
         // 2) Mocks
-        HttpClientFactoryMock = new Mock<IHttpClientFactory>();
         PublishEndpointMock = new Mock<IPublishEndpoint>();
         LoggerMock = new Mock<ILogger<OrderController>>();
         CacheServiceMock = new Mock<IRedisCacheService>();
         HubContextMock = new Mock<IHubContext<OrderTrackingHub>>();
 
-        // 3) Fake HTTP handler — defaults to 200 OK
-        FakeHttpHandler = new FakeHttpMessageHandler(HttpStatusCode.OK);
-        var httpClient = new HttpClient(FakeHttpHandler) { BaseAddress = new Uri("http://localhost:8080") };
-        HttpClientFactoryMock
-            .Setup(f => f.CreateClient("UserService"))
-            .Returns(httpClient);
-
-        // 4) Configuration (cache expiration setting)
+        // 3) Configuration (cache expiration setting)
         var configData = new Dictionary<string, string?>
         {
             { "Redis:DefaultExpirationMinutes", "30" }
@@ -65,13 +53,13 @@ public class OrderControllerTestFixture : IDisposable
             .AddInMemoryCollection(configData)
             .Build();
 
-        // 5) SignalR hub mock — returns a mock IClientProxy for group broadcasts
+        // 4) SignalR hub mock — returns a mock IClientProxy for group broadcasts
         var mockClients = new Mock<IHubClients>();
         var mockClientProxy = new Mock<IClientProxy>();
         mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClientProxy.Object);
         HubContextMock.Setup(h => h.Clients).Returns(mockClients.Object);
 
-        // 6) Cache mock — return null (cache miss) for every concrete type the controller uses.
+        // 5) Cache mock — return null (cache miss) for every concrete type the controller uses.
         //    Moq matches generic type parameters exactly, so GetAsync<object> does NOT
         //    cover GetAsync<Order>. Each type the controller awaits must be set up
         //    individually to return a completed Task; otherwise await receives null and throws.
@@ -95,7 +83,6 @@ public class OrderControllerTestFixture : IDisposable
     {
         var controller = new OrderController(
             DbContext,
-            HttpClientFactoryMock.Object,
             PublishEndpointMock.Object,
             LoggerMock.Object,
             CacheServiceMock.Object,
@@ -120,10 +107,10 @@ public class OrderControllerTestFixture : IDisposable
     {
         var claims = new List<Claim>
         {
-            new("userId", userId.ToString()),
             new(ClaimTypes.NameIdentifier, userId.ToString()),
             new(ClaimTypes.Name, username),
-            new(ClaimTypes.Role, role)
+            new(ClaimTypes.Role, role),
+            new("userId", userId.ToString())
         };
 
         var identity = new ClaimsIdentity(claims, "TestAuth");
@@ -134,34 +121,5 @@ public class OrderControllerTestFixture : IDisposable
     {
         DbContext.Database.EnsureDeleted();
         DbContext.Dispose();
-        FakeHttpHandler.Dispose();
-    }
-}
-
-/// <summary>
-/// A fake HttpMessageHandler that returns a configurable status code.
-/// Used to simulate UserService responses without hitting a real HTTP endpoint.
-/// </summary>
-public class FakeHttpMessageHandler : HttpMessageHandler
-{
-    private HttpStatusCode _statusCode;
-
-    public FakeHttpMessageHandler(HttpStatusCode statusCode)
-    {
-        _statusCode = statusCode;
-    }
-
-    /// <summary>
-    /// Change the response status code for subsequent requests.
-    /// </summary>
-    public void SetResponseStatusCode(HttpStatusCode statusCode)
-    {
-        _statusCode = statusCode;
-    }
-
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        return Task.FromResult(new HttpResponseMessage(_statusCode));
     }
 }

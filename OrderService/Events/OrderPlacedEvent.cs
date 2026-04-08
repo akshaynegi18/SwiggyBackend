@@ -6,5 +6,7 @@ namespace OrderService.Events
         public int UserId { get; set; }
         public string Item { get; set; }
         public DateTime CreatedAt { get; set; }
+        public double DestinationLatitude { get; set; }
+        public double DestinationLongitude { get; set; }
     }
 }

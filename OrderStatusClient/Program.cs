@@ -8,7 +8,7 @@ class Program
     {
         var orderId = 1; // Set the order ID you want to track
         var connection = new HubConnectionBuilder()
-            .WithUrl("http://localhost:8081/order-tracking-hub") // Change from 8080 to 8081
+            .WithUrl("http://localhost:8081/order-tracking-hub")
             .WithAutomaticReconnect()
             .Build();
 
@@ -20,6 +20,11 @@ class Program
         connection.On<DeliveryLocationUpdate>("DeliveryLocationUpdated", update =>
         {
             Console.WriteLine($"Order {update.OrderId} location: {update.Latitude}, {update.Longitude} | ETA: {update.ETA} min");
+        });
+
+        connection.On<SagaStatusUpdate>("SagaStatusUpdated", update =>
+        {
+            Console.WriteLine($"[SAGA] Order {update.OrderId} → State: {update.CurrentState} | Status: {update.Status} | Amount: {update.Amount:C}");
         });
 
         // Retry logic for connecting to SignalR hub
@@ -63,5 +68,13 @@ public class DeliveryLocationUpdate
     public int OrderId { get; set; }
     public double Latitude { get; set; }
     public double Longitude { get; set; }
-    public int? ETA { get; set; } // ETA in minutes
+    public int? ETA { get; set; }
+}
+
+public class SagaStatusUpdate
+{
+    public int OrderId { get; set; }
+    public string CurrentState { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
 }

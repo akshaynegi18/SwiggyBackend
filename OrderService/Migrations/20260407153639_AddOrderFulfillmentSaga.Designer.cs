@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OrderService.Data;
 
@@ -11,9 +12,11 @@ using OrderService.Data;
 namespace OrderService.Migrations
 {
     [DbContext(typeof(OrderDbContext))]
-    partial class OrderDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407153639_AddOrderFulfillmentSaga")]
+    partial class AddOrderFulfillmentSaga
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -149,9 +152,6 @@ namespace OrderService.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
-                    b.Property<Guid?>("DeliveryTimeoutTokenId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<double>("DestinationLatitude")
                         .HasColumnType("float");
 
@@ -175,12 +175,6 @@ namespace OrderService.Migrations
 
                     b.Property<int>("OrderId")
                         .HasColumnType("int");
-
-                    b.Property<Guid?>("PaymentTimeoutTokenId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("RestaurantTimeoutTokenId")
-                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("TransactionId")
                         .HasMaxLength(128)

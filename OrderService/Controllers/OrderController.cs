@@ -13,6 +13,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using OrderService.Services;
+using OrderService.Saga;
 
 namespace OrderService.Controllers;
 
@@ -23,7 +24,6 @@ namespace OrderService.Controllers;
 public class OrderController : ControllerBase
 {
     private readonly OrderDbContext _context;
-    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPublishEndpoint _publishEndpoint;
     private readonly ILogger<OrderController> _logger;
     private readonly IRedisCacheService _cacheService;
@@ -31,15 +31,13 @@ public class OrderController : ControllerBase
 
 
     public OrderController(
-        OrderDbContext context, 
-        IHttpClientFactory httpClientFactory, 
+        OrderDbContext context,
         IPublishEndpoint publishEndpoint,
         ILogger<OrderController> logger,
         IRedisCacheService cacheService,
         IConfiguration configuration)
     {
         _context = context;
-        _httpClientFactory = httpClientFactory;
         _publishEndpoint = publishEndpoint;
         _logger = logger;
         _cacheService = cacheService;
@@ -70,7 +68,7 @@ public class OrderController : ControllerBase
             return BadRequest(ModelState);
         }
 
-        // Get authenticated user information
+        // Get authenticated user information from JWT claims
         var authenticatedUserId = GetAuthenticatedUserId();
         var authenticatedUsername = User.Identity?.Name ?? "Unknown";
 
@@ -87,20 +85,12 @@ public class OrderController : ControllerBase
 
         try
         {
-            // Use named HttpClient - this will automatically use the configured BaseUrl
-            var httpClient = _httpClientFactory.CreateClient("UserService");
-            var userResponse = await httpClient.GetAsync($"/user/{orderDto.UserId}"); // Note: relative URL
-
-            if (!userResponse.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("User validation failed for UserId: {UserId}. StatusCode: {StatusCode}", 
-                    orderDto.UserId, userResponse.StatusCode);
-                return BadRequest("User does not exist or could not be validated.");
-            }
+            // No HTTP call needed — the user is already validated by the JWT token.
+            // The [Authorize] attribute + policy check guarantees a valid, authenticated user.
 
             var order = new Order
             {
-                UserId = orderDto.UserId,
+                UserId = authenticatedUserId,
                 CustomerName = orderDto.CustomerName,
                 Item = orderDto.Item,
                 DestinationLatitude = orderDto.DestinationLatitude,
@@ -127,7 +117,9 @@ public class OrderController : ControllerBase
                 OrderId = order.Id,
                 UserId = order.UserId,
                 Item = order.Item,
-                CreatedAt = order.CreatedAt
+                CreatedAt = order.CreatedAt,
+                DestinationLatitude = order.DestinationLatitude ?? 0,
+                DestinationLongitude = order.DestinationLongitude ?? 0
             };
             await _publishEndpoint.Publish(orderPlacedEvent);
 
@@ -600,6 +592,72 @@ public class OrderController : ControllerBase
     }
 
     /// <summary>
+    /// Gets the current saga fulfillment status for an order
+    /// </summary>
+    /// <param name="orderId">The order ID to check saga status for</param>
+    /// <returns>Current saga state and fulfillment details</returns>
+    /// <response code="200">Saga status returned</response>
+    /// <response code="401">Unauthorized - JWT token required</response>
+    /// <response code="403">Forbidden - You can only view your own order status</response>
+    /// <response code="404">No saga found for this order</response>
+    /// <response code="500">Internal server error</response>
+    [HttpGet("saga-status/{orderId}")]
+    [Authorize(Policy = "CustomerOrAdmin")]
+    [ProducesResponseType(typeof(object), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(typeof(string), 500)]
+    public async Task<IActionResult> GetSagaStatus([Range(1, int.MaxValue)] int orderId)
+    {
+        var authenticatedUserId = GetAuthenticatedUserId();
+        var authenticatedUsername = User.Identity?.Name ?? "Unknown";
+        var userRole = User.FindFirst(ClaimTypes.Role)?.Value;
+
+        _logger.LogInformation("User {Username} checking saga status for OrderId: {OrderId}", authenticatedUsername, orderId);
+
+        try
+        {
+            var sagaState = await _context.OrderSagaStates
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.OrderId == orderId);
+
+            if (sagaState is null)
+            {
+                return NotFound($"No fulfillment saga found for order {orderId}.");
+            }
+
+            // Security check: users can only view their own order saga
+            if (userRole != "Admin" && sagaState.UserId != authenticatedUserId)
+            {
+                _logger.LogWarning("User {Username} (ID: {AuthUserId}) attempted to view saga for order {OrderId} belonging to user {OrderUserId}",
+                    authenticatedUsername, authenticatedUserId, orderId, sagaState.UserId);
+                return Forbid("You can only view status for your own orders.");
+            }
+
+            return Ok(new
+            {
+                sagaState.OrderId,
+                sagaState.CurrentState,
+                sagaState.Item,
+                sagaState.Amount,
+                sagaState.TransactionId,
+                sagaState.EstimatedPrepTimeMinutes,
+                sagaState.DeliveryPartnerName,
+                sagaState.EstimatedDeliveryMinutes,
+                sagaState.FailureReason,
+                sagaState.CreatedAt,
+                sagaState.UpdatedAt
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching saga status. OrderId: {OrderId}, RequestedBy: {Username}", orderId, authenticatedUsername);
+            return StatusCode(500, "An error occurred while fetching saga status.");
+        }
+    }
+
+    /// <summary>
     /// Helper method to get authenticated user ID from JWT claims
     /// </summary>
     private int GetAuthenticatedUserId()
@@ -681,7 +739,7 @@ public class PlaceOrderDto
     [StringLength(200, MinimumLength = 1, ErrorMessage = "Item name is required and cannot exceed 200 characters")]
     public string Item { get; set; }
 
-    /// <summary>
+    /// <summary>saga
     /// Delivery destination latitude
     /// </summary>
     [Required]

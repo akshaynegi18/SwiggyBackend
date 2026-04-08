@@ -1,4 +1,3 @@
-using System.Net;
 using FluentAssertions;
 using MassTransit;
 using Microsoft.AspNetCore.Mvc;
@@ -12,7 +11,7 @@ namespace OrderService.Tests.Controllers;
 
 /// <summary>
 /// Tests for the POST /order/place endpoint.
-/// Covers: happy path, user validation, security, caching, and event publishing.
+/// Covers: happy path, security, caching, and event publishing.
 /// </summary>
 public class PlaceOrderTests : IDisposable
 {
@@ -113,23 +112,7 @@ public class PlaceOrderTests : IDisposable
     }
 
     // ─────────────────────────────────────────────
-    // 5. UserService returns 404 — order rejected
-    // ─────────────────────────────────────────────
-    [Fact]
-    public async Task PlaceOrder_UserServiceReturns404_ReturnsBadRequest()
-    {
-        _fixture.FakeHttpHandler.SetResponseStatusCode(HttpStatusCode.NotFound);
-        var controller = _fixture.CreateController(userId: 1);
-        var dto = CreateValidDto();
-
-        var result = await controller.PlaceOrder(dto);
-
-        var badRequest = result.Should().BeOfType<BadRequestObjectResult>().Subject;
-        badRequest.Value.Should().Be("User does not exist or could not be validated.");
-    }
-
-    // ─────────────────────────────────────────────
-    // 6. User tries to place order for a different userId — forbidden
+    // 5. User tries to place order for a different userId — forbidden
     // ─────────────────────────────────────────────
     [Fact]
     public async Task PlaceOrder_UserIdMismatch_ReturnsForbid()
@@ -144,17 +127,32 @@ public class PlaceOrderTests : IDisposable
     }
 
     // ─────────────────────────────────────────────
-    // 7. No order saved when UserService rejects
+    // 6. No order saved when userId mismatches (Forbid)
     // ─────────────────────────────────────────────
     [Fact]
-    public async Task PlaceOrder_UserValidationFails_DoesNotSaveOrder()
+    public async Task PlaceOrder_UserIdMismatch_DoesNotSaveOrder()
     {
-        _fixture.FakeHttpHandler.SetResponseStatusCode(HttpStatusCode.NotFound);
         var controller = _fixture.CreateController(userId: 1);
-        var dto = CreateValidDto();
+        var dto = CreateValidDto(userId: 999);
 
         await controller.PlaceOrder(dto);
 
         _fixture.DbContext.Orders.Should().BeEmpty();
+    }
+
+    // ─────────────────────────────────────────────
+    // 7. Order uses authenticated userId, not DTO manipulation
+    // ─────────────────────────────────────────────
+    [Fact]
+    public async Task PlaceOrder_ValidOrder_UsesAuthenticatedUserId()
+    {
+        var controller = _fixture.CreateController(userId: 42);
+        var dto = CreateValidDto(userId: 42);
+
+        var result = await controller.PlaceOrder(dto);
+
+        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
+        var order = okResult.Value.Should().BeOfType<Order>().Subject;
+        order.UserId.Should().Be(42);
     }
 }
