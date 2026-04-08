@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using OrderService.Services;
 using OrderService.Saga;
+using OrderService.Idempotency;
 using Microsoft.AspNetCore.RateLimiting;
 
 namespace OrderService.Controllers;
@@ -50,14 +51,20 @@ public class OrderController : ControllerBase
     /// </summary>
     /// <param name="orderDto">Order details including customer information and items</param>
     /// <returns>The created order with assigned ID</returns>
+    /// <remarks>
+    /// Requires an <c>Idempotency-Key</c> header (any unique string, e.g. a GUID).
+    /// If the same key is sent again within 24 hours, the original response is replayed
+    /// and no duplicate order is created.
+    /// </remarks>
     /// <response code="200">Order placed successfully</response>
-    /// <response code="400">Invalid order data or user validation failed</response>
+    /// <response code="400">Invalid order data, user validation failed, or missing Idempotency-Key header</response>
     /// <response code="401">Unauthorized - JWT token required</response>
     /// <response code="403">Forbidden - Customer role required</response>
     /// <response code="500">Internal server error occurred</response>
     [HttpPost("place")]
     [Authorize(Policy = "CustomerOnly")]
     [EnableRateLimiting("order-placement")]
+    [IdempotentRequest]
     [ProducesResponseType(typeof(Order), 200)]
     [ProducesResponseType(typeof(string), 400)]
     [ProducesResponseType(401)]

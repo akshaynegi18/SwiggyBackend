@@ -220,6 +220,9 @@ try
             }
         });
 
+        // Add Idempotency-Key header to Swagger UI for [IdempotentRequest] endpoints
+        c.OperationFilter<OrderService.Idempotency.IdempotencyHeaderOperationFilter>();
+
         var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
         var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
         try
@@ -345,11 +348,11 @@ try
                     });
 
                     // Command endpoints (saga sends commands to these queues)
-                    cfg.ReceiveEndpoint("process-payment", e =>
+                    cfg.ReceiveEndpoint("process-payment",e =>
                         e.ConfigureConsumer<ProcessPaymentConsumer>(context));
-                    cfg.ReceiveEndpoint("confirm-restaurant", e =>
+                    cfg.ReceiveEndpoint("confirm-restaurant",e =>
                         e.ConfigureConsumer<ConfirmRestaurantConsumer>(context));
-                    cfg.ReceiveEndpoint("assign-delivery-partner", e =>
+                    cfg.ReceiveEndpoint("assign-delivery-partner",e=>
                         e.ConfigureConsumer<AssignDeliveryPartnerConsumer>(context));
                     cfg.ReceiveEndpoint("refund-payment", e =>
                         e.ConfigureConsumer<RefundPaymentConsumer>(context));
