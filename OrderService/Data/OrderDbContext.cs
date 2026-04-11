@@ -1,5 +1,6 @@
 ﻿namespace OrderService.Data
 {
+    using MassTransit;
     using Microsoft.EntityFrameworkCore;
     using OrderService.Model;
     using OrderService.Saga;
@@ -29,6 +30,14 @@
                 entity.Property(x => x.FailureReason).HasMaxLength(512);
                 entity.HasIndex(x => x.OrderId).IsUnique();
             });
+
+            // ── Transactional Outbox tables ──
+            // InboxState  — consumer-side deduplication (prevents re-processing the same message)
+            // OutboxMessage — stores serialized messages to be delivered to the transport
+            // OutboxState — tracks delivery status per outbox batch
+            modelBuilder.AddInboxStateEntity();
+            modelBuilder.AddOutboxMessageEntity();
+            modelBuilder.AddOutboxStateEntity();
         }
 
         public OrderDbContext(DbContextOptions<OrderDbContext> options) : base(options) { }

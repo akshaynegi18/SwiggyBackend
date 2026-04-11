@@ -94,9 +94,6 @@ public class OrderController : ControllerBase
 
         try
         {
-            // No HTTP call needed — the user is already validated by the JWT token.
-            // The [Authorize] attribute + policy check guarantees a valid, authenticated user.
-
             var order = new Order
             {
                 UserId = authenticatedUserId,
@@ -108,19 +105,15 @@ public class OrderController : ControllerBase
                 Status = "Placed"
             };
 
+            // ── Transactional Outbox: save order + publish event atomically ──
+            // Both _context.SaveChangesAsync() and _publishEndpoint.Publish() write
+            // to the same scoped OrderDbContext. The explicit transaction ensures
+            // the Order row and the OutboxMessage row commit or roll back together.
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+
             _context.Orders.Add(order);
             await _context.SaveChangesAsync();
 
-            // Cache the new order
-            await _cacheService.SetAsync(
-                CacheKeys.GetOrderKey(order.Id), 
-                order, 
-                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
-
-            // Invalidate user-related caches
-            await InvalidateUserCaches(order.UserId);
-
-            // Publish event
             var orderPlacedEvent = new OrderPlacedEvent
             {
                 OrderId = order.Id,
@@ -131,6 +124,16 @@ public class OrderController : ControllerBase
                 DestinationLongitude = order.DestinationLongitude ?? 0
             };
             await _publishEndpoint.Publish(orderPlacedEvent);
+
+            await transaction.CommitAsync();
+
+            // Cache operations are non-critical — safe to run outside the transaction
+            await _cacheService.SetAsync(
+                CacheKeys.GetOrderKey(order.Id), 
+                order, 
+                TimeSpan.FromMinutes(GetCacheExpirationMinutes()));
+
+            await InvalidateUserCaches(order.UserId);
 
             _logger.LogInformation("Order placed successfully by {Username}. OrderId: {OrderId}, UserId: {UserId}", 
                 authenticatedUsername, order.Id, order.UserId);

@@ -271,6 +271,27 @@ try
                     r.ExistingDbContext<OrderDbContext>();
                 });
 
+            // ── Transactional Outbox ─────────────────────────────────────────
+            // Consumers: outbox filter wraps each consumer in a DB transaction so
+            //            Publish/Send and SaveChangesAsync commit atomically.
+            // Bus outbox: replaces IPublishEndpoint / ISendEndpointProvider from DI
+            //             so controllers & background services also write to the
+            //             outbox table. A hosted delivery service polls the table
+            //             and forwards messages to the transport.
+            x.AddEntityFrameworkOutbox<OrderDbContext>(o =>
+            {
+                o.UseSqlServer();
+
+                // Enable outbox for DI-resolved IPublishEndpoint (used in controllers)
+                o.UseBusOutbox();
+
+                // How often the delivery service polls the outbox table
+                o.QueryDelay = TimeSpan.FromSeconds(1);
+
+                // Window for inbox-based duplicate detection
+                o.DuplicateDetectionWindow = TimeSpan.FromMinutes(5);
+            });
+
             if (messageBrokerProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
             {
                 x.UsingAzureServiceBus((context, cfg) =>
